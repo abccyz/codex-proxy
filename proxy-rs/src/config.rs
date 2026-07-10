@@ -313,46 +313,60 @@ impl ConfigManager {
             content.clone()
         };
 
-        // Update model (skip if model_name is empty to avoid clearing)
+        // FIX: Ensure model and model_provider appear exactly once at the top
+        // Strategy: Remove all existing top-level model/model_provider lines first,
+        // then prepend the correct values
+
+        // Split into header (before first [) and body (from first [ onwards)
+        let first_section_pos = new_content.find('[');
+        let (header, body) = match first_section_pos {
+            Some(pos) => (new_content[..pos].to_string(), new_content[pos..].to_string()),
+            None => (new_content.clone(), String::new()),
+        };
+
+        // Remove all existing model and model_provider lines from header
+        let cleaned_header: String = header
+            .lines()
+            .filter(|line| {
+                let trimmed = line.trim();
+                !trimmed.starts_with("model_provider") && !trimmed.starts_with("model ")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Build new header with model and model_provider at the top
+        let mut new_header_parts = Vec::new();
         if !model_name.is_empty() {
-            let model_re = Regex::new(r"(?m)^model\s*=.*$").unwrap();
-            if model_re.is_match(&new_content) {
-                new_content = model_re
-                    .replace(&new_content, format!(r#"model = "{}""#, model_name))
-                    .to_string();
-            } else {
-                new_content = format!(r#"model = "{}"\n{}"#, model_name, new_content);
+            new_header_parts.push(format!(r#"model = "{}""#, model_name));
+        }
+        new_header_parts.push(format!(r#"model_provider = "{}""#, provider));
+        
+        // Add back any other lines from cleaned header (non-empty)
+        for line in cleaned_header.lines() {
+            if !line.trim().is_empty() {
+                new_header_parts.push(line.to_string());
             }
         }
 
-        // Update model_provider
-        let provider_re = Regex::new(r"(?m)^model_provider\s*=.*$").unwrap();
-        if provider_re.is_match(&new_content) {
-            new_content = provider_re
-                .replace(
-                    &new_content,
-                    format!(r#"model_provider = "{}""#, provider),
-                )
-                .to_string();
+        let new_header = new_header_parts.join("\n");
+        new_content = if body.is_empty() {
+            new_header
         } else {
-            new_content = format!(
-                r#"model_provider = "{}"\n{}"#,
-                provider, new_content
-            );
-        }
+            format!("{}\n{}", new_header, body)
+        };
 
         // Update or add provider section
-        // base_url in config.toml must always point to local proxy,
-        // the proxy handles actual upstream routing internally
+        // FIX: Use PATH as env_key (always exists, Codex check will pass)
+        // The actual API key is handled by the proxy, not by Codex directly
         let provider_section = format!(
             r#"
 [model_providers.{}]
 name = "{}"
-base_url = "http://127.0.0.1:8000/v1"
+base_url = "{}"
 env_key = "PATH"
 wire_api = "responses"
 "#,
-            provider, provider
+            provider, provider, _base_url
         );
 
         // Use capture group instead of lookahead (Rust regex doesn't support lookahead)
