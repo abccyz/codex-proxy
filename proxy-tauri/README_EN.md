@@ -2,6 +2,8 @@
 
 A lightweight desktop application built with Tauri that proxies AI client requests (such as Codex CLI) to any LLM service compatible with the OpenAI Chat Completions API, while providing real-time monitoring, session preview, and configuration management.
 
+![Dashboard Screenshot](./home.jpg)
+
 ## Features
 
 ### Protocol Conversion Proxy

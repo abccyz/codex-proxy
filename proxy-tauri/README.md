@@ -2,6 +2,8 @@
 
 一款基于 Tauri 构建的轻量级桌面应用，用于将 Codex CLI 等 AI 客户端的请求代理转发至任意兼容 OpenAI Chat Completions API 的 LLM 服务，同时提供实时监控、会话预览与配置管理功能。
 
+![Dashboard 首页截图](./home.jpg)
+
 ## 功能特性
 
 ### 协议转换代理
