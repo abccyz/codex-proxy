@@ -14,10 +14,17 @@ export interface HistoryMeta {
   preview: string;
 }
 
+export interface TaskItem {
+  text: string;
+  done: boolean;
+}
+
 export interface LiveStreamSnapshot {
   model: string;
   accumulated: string;
   elapsed_secs: number;
+  finished: boolean;
+  tasks: TaskItem[];
 }
 
 export interface Snapshot {

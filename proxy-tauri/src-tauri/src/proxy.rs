@@ -308,6 +308,13 @@ async fn handle_normal_response(
 
     state.metrics.record_request(upstream_model.clone(), true, "success".into(), latency, in_tok, out_tok, String::new(), content.clone(), None, input_detail);
 
+    // Also push to live session view
+    state.metrics.stream_begin(upstream_model.clone());
+    if !content.is_empty() {
+        state.metrics.stream_chunk(&content);
+    }
+    state.metrics.stream_end();
+
     let resp_id = make_response_id();
     let item_id = make_item_id();
     let created = chrono::Utc::now().timestamp();
@@ -423,6 +430,7 @@ async fn handle_streaming_response(
                     for tc in tc_delta {
                         let idx = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                         let acc = tool_calls.entry(idx).or_default();
+                        let name_was_empty = acc.name.is_empty();
                         if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
                             if !id.is_empty() { acc.id = id.to_string(); }
                         }
@@ -433,6 +441,10 @@ async fn handle_streaming_response(
                             if let Some(args) = fn_obj.get("arguments").and_then(|v| v.as_str()) {
                                 acc.arguments_parts.push(args.to_string());
                             }
+                        }
+                        // Record tool call to session when name is first detected
+                        if name_was_empty && !acc.name.is_empty() {
+                            metrics.stream_tool_call(&acc.name);
                         }
                     }
                 }
@@ -568,7 +580,12 @@ async fn handle_nonstreaming_to_sse(
 
     let (output_items, _has_text, _content_str, function_calls) = convert_chat_message_to_output(msg);
 
+    let metrics = state.metrics.clone();
+    metrics.stream_begin(upstream_model.clone());
+
     let stream = async_stream::stream! {
+        let mut _cleanup = StreamCleanupGuard::new(metrics.clone());
+
         yield Ok::<_, Infallible>(axum::response::sse::Event::default()
             .event("response.created")
             .data(serde_json::to_string(&serde_json::json!({
@@ -587,6 +604,10 @@ async fn handle_nonstreaming_to_sse(
 
         // Emit text content if present
         if !content.is_empty() || ModelVendor::from_model_name(&upstream_model).requires_reasoning_content() {
+            // Feed content to live stream for dashboard preview
+            if !content.is_empty() {
+                metrics.stream_chunk(&content);
+            }
             yield Ok::<_, Infallible>(axum::response::sse::Event::default()
                 .event("response.output_item.added")
                 .data(serde_json::to_string(&serde_json::json!({
@@ -630,6 +651,8 @@ async fn handle_nonstreaming_to_sse(
         // Emit function_call events
         for (i, fc) in function_calls.iter().enumerate() {
             let oi = 1 + i as u32;
+            // Record tool call to session
+            metrics.stream_tool_call(&fc.name);
             yield Ok::<_, Infallible>(axum::response::sse::Event::default()
                 .event("response.output_item.added")
                 .data(serde_json::to_string(&serde_json::json!({
@@ -663,6 +686,8 @@ async fn handle_nonstreaming_to_sse(
 
         yield Ok::<_, Infallible>(axum::response::sse::Event::default().data("[DONE]"));
 
+        _cleanup.disarm();
+        metrics.stream_end();
         state.metrics.record_request(
             upstream_model, true, "success".into(), latency,
             in_tok, out_tok, String::new(), content,

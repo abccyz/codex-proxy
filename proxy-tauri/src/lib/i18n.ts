@@ -74,7 +74,8 @@ const zh: Record<string, string> = {
   theme_light: "亮色",
   lang_zh: "中文",
   lang_en: "English",
-  live_stream: "实时流",
+  live_stream: "会话",
+  clear_session: "清空",
 };
 
 const en: Record<string, string> = {
@@ -151,7 +152,8 @@ const en: Record<string, string> = {
   theme_light: "Light",
   lang_zh: "中文",
   lang_en: "English",
-  live_stream: "Live Stream",
+  live_stream: "Session",
+  clear_session: "Clear",
 };
 
 export const dictionaries = { zh, en };
