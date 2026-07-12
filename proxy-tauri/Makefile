@@ -33,6 +33,38 @@ tauri-dev:
 tauri-build:
 	npm run tauri build
 
+# ── Platform Bundle Build ────────────────────────────────────────
+.PHONY: bundle-macos bundle-windows bundle-linux bundle-all
+
+# macOS: .dmg + .app
+bundle-macos:
+	@echo "Building macOS bundle (.dmg + .app)..."
+	npm run tauri build -- --bundles dmg app
+	@echo "macOS bundle built: $(CARGO_DIR)/target/release/bundle/"
+
+# Windows: .msi + .nsis installer
+bundle-windows:
+	@echo "Building Windows bundle (.msi + .nsis)..."
+	npm run tauri build -- --bundles msi nsis
+	@echo "Windows bundle built: $(CARGO_DIR)/target/release/bundle/"
+
+# Linux: .deb + .rpm + .AppImage
+bundle-linux:
+	@echo "Building Linux bundle (.deb + .rpm + .AppImage)..."
+	npm run tauri build -- --bundles deb rpm appimage
+	@echo "Linux bundle built: $(CARGO_DIR)/target/release/bundle/"
+
+# Build all bundles for current platform
+bundle-all:
+ifeq ($(UNAME),Darwin)
+	$(MAKE) bundle-macos
+else ifeq ($(UNAME),Linux)
+	$(MAKE) bundle-linux
+else
+	$(MAKE) bundle-windows
+endif
+	@echo "All bundles built for $(UNAME)."
+
 # ── Run ─────────────────────────────────────────────────────────
 .PHONY: run run-release
 
@@ -143,5 +175,9 @@ help:
 	@echo "  make status        - Check if $(APP_NAME) and proxy are running"
 	@echo "  make dev           - Dev mode (backend + frontend)"
 	@echo "  make tauri-dev     - Run full Tauri dev mode"
-	@echo "  make tauri-build   - Build production Tauri bundle"
-	@echo "  make clean         - Clean all build artifacts"
+	@echo "  make tauri-build     - Build production Tauri bundle"
+	@echo "  make bundle-macos    - Build macOS bundle (.dmg + .app)"
+	@echo "  make bundle-windows  - Build Windows bundle (.msi + .nsis)"
+	@echo "  make bundle-linux    - Build Linux bundle (.deb + .rpm + .AppImage)"
+	@echo "  make bundle-all      - Build bundles for current platform"
+	@echo "  make clean           - Clean all build artifacts"
