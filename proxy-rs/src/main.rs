@@ -5,9 +5,13 @@ mod config;
 mod convert;
 mod error;
 mod metrics;
+mod model;
 mod proxy;
 mod sse;
 mod ui;
+#[cfg(target_os = "macos")]
+mod macos_menu;
+mod connectivity;
 
 use crate::config::{ConfigManager, SecureConfigStore};
 use crate::metrics::Metrics;
@@ -82,27 +86,39 @@ impl App {
             config_manager: config_manager.clone(),
             proxy_running: proxy_running.clone(),
             log_level: tracing::Level::INFO,
+            connectivity_result: RwLock::new(None),
         });
 
-        // Try to load initial upstream config from saved configs (overrides defaults)
-        if let Some(first_cfg) = secure_store.list_configs().first() {
+        // Read current config from config.toml
+        let current = config_manager.get_current_model();
+
+        // Try to load initial upstream config matching current config.toml model (overrides defaults)
+        let saved_configs = secure_store.list_configs();
+        let matching_cfg = saved_configs.iter().find(|s| s.model == current.model);
+        if let Some(cfg) = matching_cfg {
+            if let Some(full) = secure_store.get_config_full(&cfg.name) {
+                let upstream = format!("{}/chat/completions", full.base_url.trim_end_matches('/'));
+                app_state.set_upstream(upstream, full.api_key);
+                app_state.set_upstream_model(cfg.model.clone());
+                tracing::info!("Initial upstream loaded from saved config '{}': {} (model: {})", cfg.name, full.base_url, cfg.model);
+            }
+        } else if let Some(first_cfg) = saved_configs.first() {
+            // Fallback: no matching config found, use most recently updated
             if let Some(full) = secure_store.get_config_full(&first_cfg.name) {
                 let upstream = format!("{}/chat/completions", full.base_url.trim_end_matches('/'));
                 app_state.set_upstream(upstream, full.api_key);
                 app_state.set_upstream_model(first_cfg.model.clone());
-                tracing::info!("Initial upstream loaded from saved config '{}': {} (model: {})", first_cfg.name, first_cfg.base_url, first_cfg.model);
+                tracing::info!("Initial upstream loaded from saved config '{}': {} (model: {}) (fallback)", first_cfg.name, first_cfg.base_url, first_cfg.model);
             }
         } else {
             tracing::info!("Using default upstream: {} (model: {})", DEFAULT_UPSTREAM_URL, DEFAULT_UPSTREAM_MODEL);
         }
-
         // On startup, ensure config.toml always points to the proxy
-        let current = config_manager.get_current_model();
         if current.provider != PROXY_PROVIDER || current.base_url != PROXY_BASE_URL {
             let model = if current.model.is_empty() {
                 secure_store.list_configs().first().map(|s| s.model.clone()).unwrap_or_default()
             } else {
-                current.model
+                current.model.clone()
             };
             if !model.is_empty() {
                 config_manager.apply_model(&model, PROXY_PROVIDER, PROXY_BASE_URL, "");
@@ -136,10 +152,26 @@ impl App {
 }
 
 impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Always render the UI
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Schedule next repaint based on metrics state
+        let gen = self.metrics.generation();
+
+        if gen != self.last_generation {
+            self.last_generation = gen;
+            // 新记录到达：立即请求下一帧重绘
+            ctx.request_repaint();
+        } else if self.metrics.has_active_stream() {
+            // 活动流中 generation 不变，但需要持续重绘以更新实时面板（约 60fps）
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        } else {
+            // 空闲轮询：确保跨线程新增的记录能及时显示（200ms 检测周期）
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         render(
-            ctx,
+            ui,
             &mut self.ui_state,
             &self.metrics,
             &self.config_manager,
@@ -147,17 +179,32 @@ impl eframe::App for App {
             &self.app_state,
             self.proxy_running.load(Ordering::Relaxed),
         );
+    }
+}
 
-            // Schedule next repaint based on metrics state
-        let gen = self.metrics.generation();
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct WindowState {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+}
 
-        if gen != self.last_generation {
-            self.last_generation = gen;
-            // 历史记录或状态变化：100ms 内响应式刷新
-            ctx.request_repaint_after(std::time::Duration::from_millis(100));
-        } else if self.metrics.has_active_stream() {
-            // 活动流中 generation 不变，但需要持续重绘以更新实时面板
-            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+fn load_window_state() -> Option<WindowState> {
+    let home = std::env::var("HOME").ok()?;
+    let path = std::path::Path::new(&home).join(".codex/proxy/window_state.json");
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn save_window_state(state: &WindowState) {
+    if let Ok(home) = std::env::var("HOME") {
+        let path = std::path::Path::new(&home).join(".codex/proxy/window_state.json");
+        if let Ok(parent) = path.parent().ok_or(()) {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(json) = serde_json::to_string_pretty(state) {
+            let _ = std::fs::write(path, json);
         }
     }
 }
@@ -171,11 +218,27 @@ fn main() {
         )
         .init();
 
+    // Load saved window state
+    let window_state = load_window_state();
+    let default_size = [1200.0, 800.0];
+    let size = window_state.as_ref().map(|s| [s.width, s.height]).unwrap_or(default_size);
+    
+    // Fixed window size for consistent UI
+    let fixed_size = [1200.0, 800.0];
+    
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size(fixed_size)
+        .with_resizable(false)  // Fix window size
+        .with_title("Codex Proxy Monitor")
+        .with_decorations(true);  // Keep window decorations (title bar)
+    
+    // Restore window position if available
+    if let Some(state) = &window_state {
+        viewport = viewport.with_position([state.x, state.y]);
+    }
+    
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1200.0, 800.0])
-            .with_min_inner_size([800.0, 600.0])
-            .with_title("Codex Proxy Monitor"),
+        viewport,
         ..Default::default()
     };
 
@@ -185,6 +248,11 @@ fn main() {
         Box::new(|cc| {
             // Load Chinese font for proper CJK rendering
             load_chinese_font(&cc.egui_ctx);
+            
+            // Setup custom menu bar on macOS
+            #[cfg(target_os = "macos")]
+            macos_menu::setup_custom_menu_bar();
+            
             Ok(Box::new(App::new()))
         }),
     )
@@ -198,7 +266,7 @@ fn load_chinese_font(ctx: &egui::Context) {
     if let Some(bytes) = find_chinese_font() {
         fonts.font_data.insert(
             "chinese".to_owned(),
-            egui::FontData::from_owned(bytes),
+            std::sync::Arc::new(egui::FontData::from_owned(bytes)),
         );
         fonts
             .families

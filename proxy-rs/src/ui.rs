@@ -1,7 +1,7 @@
 use eframe::egui;
 use egui::{
-    Align, Color32, Context, Frame, Layout, Margin, RichText, Rounding, ScrollArea,
-    Sense, Stroke, vec2,
+    Align, Color32, Context, Frame, Layout, Margin, RichText, ScrollArea,
+    Sense, Stroke, vec2, CornerRadius,
 };
 use egui_plot::{Line, Plot, PlotPoints};
 use std::collections::HashMap;
@@ -9,6 +9,8 @@ use std::sync::Arc;
 use once_cell::sync::Lazy;
 
 use crate::config::{ConfigManager, SavedConfig, SecureConfigStore};
+use crate::connectivity::{self, ConnectivityResult};
+use crate::model::{get_provider_presets, ProviderPreset};
 
 /// Proxy provider name and base URL written to config.toml
 pub const PROXY_PROVIDER: &str = "Model_Studio";
@@ -47,8 +49,15 @@ static I18N_ZH: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
         ("config_provider","Provider"),("config_base_url","Base URL"),("config_api_key","API Key"),("config_model","Model"),
         ("config_name_ph","例: my-key"),("config_saved","已保存配置 (加密)"),("badge_active","当前使用"),
         ("toast_apply_ok","配置已应用"),("toast_save_apply_ok","配置已保存并应用"),
-        ("config_editor","config.toml 编辑器"),
-        ("btn_apply","应用"),("btn_reload","重新加载"),("btn_save_apply","保存并应用"),
+        ("config_status","代理状态"),
+        ("config_preset","供应商"),("config_preset_custom","自定义"),
+        ("btn_test","测试连接"),("btn_testing","测试中..."),
+        ("btn_edit","编辑"),("btn_cancel","取消"),("btn_confirm_delete","确认删除"),
+        ("test_success","连接成功"),("test_failed","连接失败"),
+        ("test_latency","延迟"),("test_models","可用模型"),
+        ("history_search","搜索"),("history_no_results","无匹配结果"),
+        ("delete_confirm_title","确认删除"),("delete_confirm_msg","确定要删除配置 '{}' 吗？"),
+        ("btn_apply","应用"),("btn_reload","重新加载"),
         ("btn_back","返回"),("btn_page","页"),("btn_delete","删除"),
         ("empty_data","暂无数据"),("empty_history","暂无请求，请在 Codex 中开始对话！"),
         ("empty_config","暂无保存的配置"),
@@ -79,8 +88,15 @@ static I18N_EN: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {
         ("config_provider","Provider"),("config_base_url","Base URL"),("config_api_key","API Key"),("config_model","Model"),
         ("config_name_ph","e.g. my-key"),("config_saved","Saved Configs (Encrypted)"),("badge_active","Active"),
         ("toast_apply_ok","Config applied"),("toast_save_apply_ok","Config saved & applied"),
-        ("config_editor","config.toml Editor"),
-        ("btn_apply","Apply"),("btn_reload","Reload"),("btn_save_apply","Save & Apply"),
+        ("config_status","Proxy Status"),
+        ("config_preset","Provider"),("config_preset_custom","Custom"),
+        ("btn_test","Test Connection"),("btn_testing","Testing..."),
+        ("btn_edit","Edit"),("btn_cancel","Cancel"),("btn_confirm_delete","Confirm Delete"),
+        ("test_success","Connection OK"),("test_failed","Connection Failed"),
+        ("test_latency","Latency"),("test_models","Available Models"),
+        ("history_search","Search"),("history_no_results","No matching results"),
+        ("delete_confirm_title","Confirm Delete"),("delete_confirm_msg","Are you sure you want to delete config '{}'?"),
+        ("btn_apply","Apply"),("btn_reload","Reload"),
         ("btn_back","Back"),("btn_page","Page"),("btn_delete","Delete"),
         ("empty_data","No data yet"),("empty_history","No requests yet."),
         ("empty_config","No saved configs yet."),
@@ -180,12 +196,30 @@ pub struct UiState {
     pub config_base_url: String,
     pub config_api_key: String,
     pub config_model: String,
-    pub config_editor: String,
     pub current_config: crate::config::CurrentConfig,
     pub saved_configs: Vec<SavedConfig>,
     pub config_loaded: bool,
     pub toast_msg: Option<String>,
     pub toast_time: f64,
+    // Provider preset selection
+    pub selected_preset: String,
+    pub presets: Vec<ProviderPreset>,
+    // Connectivity test state
+    pub connectivity_result: Option<ConnectivityResult>,
+    pub connectivity_testing: bool,
+    // History search and sort
+    pub history_search: String,
+    pub history_sort_by: HistorySortBy,
+    pub history_sort_asc: bool,
+    // Delete confirmation
+    pub delete_confirm_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum HistorySortBy {
+    Time,
+    Tokens,
+    Latency,
 }
 
 impl UiState {
@@ -199,10 +233,17 @@ impl UiState {
             config_base_url: "".into(),
             config_api_key: String::new(),
             config_model: "".into(),
-            config_editor: String::new(),
             current_config: crate::config::CurrentConfig { model: String::new(), provider: String::new(), base_url: String::new() },
             saved_configs: vec![], config_loaded: false,
             toast_msg: None, toast_time: 0.0,
+            selected_preset: "qwen".to_string(),
+            presets: get_provider_presets(),
+            connectivity_result: None,
+            connectivity_testing: false,
+            history_search: String::new(),
+            history_sort_by: HistorySortBy::Time,
+            history_sort_asc: false,
+            delete_confirm_name: None,
         }
     }
 }
@@ -239,20 +280,20 @@ fn section_label(ui: &mut egui::Ui, c: &C, label: &str) {
 }
 
 fn card_frame<'a>(c: &C) -> Frame {
-    Frame::none()
+    Frame::NONE
         .fill(c.card)
         .stroke(Stroke::new(1.0, c.border))
-        .rounding(Rounding::same(6.0))
-        .inner_margin(Margin::symmetric(12.0, 10.0))
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(Margin::symmetric(12, 10))
 }
 
 /// Content card in detail modal – uses elev for max distinctness from surface bg
 fn content_card<'a>(c: &C, _border_color: Color32) -> Frame {
-    Frame::none()
+    Frame::NONE
         .fill(c.elev)
         .stroke(Stroke::new(1.0, c.border))
-        .rounding(Rounding::same(6.0))
-        .inner_margin(Margin::symmetric(14.0, 12.0))
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(Margin::symmetric(14, 12))
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -260,21 +301,22 @@ fn content_card<'a>(c: &C, _border_color: Color32) -> Frame {
 // ═══════════════════════════════════════════════════════════════
 
 pub fn render(
-    ctx: &Context, state: &mut UiState, metrics: &SharedMetrics,
+    ui: &mut egui::Ui, state: &mut UiState, metrics: &SharedMetrics,
     cm: &ConfigManager, ss: &SecureConfigStore, app_state: &Arc<AppState>, proxy_running: bool,
 ) {
+    let ctx = ui.ctx().clone();
     let c = colors(state.dark_mode);
     let lang = state.lang;
 
     // 仅在 theme 变化时重建并设置 Style（避免每帧克隆+布局）
     if state.dark_mode != state.last_dark_mode {
         state.last_dark_mode = state.dark_mode;
-        let mut style = (*ctx.style()).clone();
+        let mut style = (*ctx.global_style()).clone();
         let vis = &mut style.visuals;
         vis.window_fill = c.bg;
         vis.panel_fill = c.bg;
         vis.extreme_bg_color = c.bg;
-        vis.window_rounding = egui::Rounding::same(8.0);
+        vis.window_corner_radius = egui::CornerRadius::same(8);
         vis.window_stroke = Stroke::new(1.0, c.border);
         vis.window_shadow = egui::epaint::Shadow::NONE;
         vis.widgets.noninteractive.fg_stroke = Stroke::new(1.0, c.text);
@@ -299,14 +341,14 @@ pub fn render(
             ..Default::default()
         };
         vis.hyperlink_color = c.blue;
-        ctx.set_style(style);
+        ctx.set_global_style(style);
     }
 
     let snap = metrics.snapshot();
-    let viewport_h = ctx.available_rect().height();
+    let viewport_h = ui.available_rect_before_wrap().height();
 
     // ── Top bar ──
-    egui::TopBottomPanel::top("bar").frame(Frame { fill: c.card, inner_margin: Margin::symmetric(10.0, 6.0), ..Default::default() }).show(ctx, |ui| {
+    egui::Panel::top("bar").frame(Frame { fill: c.card, inner_margin: Margin::symmetric(10, 6), ..Default::default() }).show(ui, |ui| {
         ui.horizontal(|ui| {
             // Status dot + proxy server status
             let (dot_color, status_text) = if proxy_running {
@@ -318,6 +360,10 @@ pub fn render(
             ui.label(RichText::new(format!("{} {}", t(lang,"proxy_status"), status_text)).color(dot_color).size(11.0).strong());
             ui.separator();
             ui.label(RichText::new(t(lang,"title")).color(c.text).size(14.0).strong());
+            let model_name = cm.get_current_model().model;
+            if !model_name.is_empty() {
+                ui.label(RichText::new(format!(" — {}", model_name)).color(c.green).size(12.0).strong());
+            }
             ui.label(RichText::new(format!(" | {}: {}", t(lang,"uptime"), fmt_uptime(snap.uptime))).color(c.text2).size(10.0));
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.add_space(8.0);
@@ -333,7 +379,7 @@ pub fn render(
     });
 
     // ── Content ──
-    egui::CentralPanel::default().frame(Frame::none().fill(c.bg).inner_margin(Margin::symmetric(12.0, 6.0))).show(ctx, |ui| {
+    egui::CentralPanel::default_margins().frame(Frame::NONE.fill(c.bg).inner_margin(Margin::symmetric(12, 6))).show(ui, |ui| {
         match state.active_tab {
             ActiveTab::Dashboard => {
                 render_dashboard(ui, state, &snap, app_state, lang, &c, viewport_h);
@@ -342,9 +388,31 @@ pub fn render(
         }
     });
 
+    // ── Keyboard Shortcuts ──
+    ctx.input(|i| {
+        let cmd_or_ctrl = i.modifiers.command || i.modifiers.ctrl;
+        
+        // Cmd/Ctrl+1: Switch to Dashboard
+        if cmd_or_ctrl && i.key_pressed(egui::Key::Num1) {
+            state.active_tab = ActiveTab::Dashboard;
+        }
+        // Cmd/Ctrl+2: Switch to Config
+        if cmd_or_ctrl && i.key_pressed(egui::Key::Num2) {
+            state.active_tab = ActiveTab::Config;
+        }
+        // Esc: Close detail modal or clear search
+        if i.key_pressed(egui::Key::Escape) {
+            if state.detail_idx.is_some() {
+                state.detail_idx = None;
+            } else if !state.history_search.is_empty() {
+                state.history_search.clear();
+            }
+        }
+    });
+
     // ── Detail Modal (overlay) ──
     if state.detail_idx.is_some() {
-        render_detail_modal(ctx, state, metrics, &snap, lang, &c);
+        render_detail_modal(&ctx, state, metrics, &snap, lang, &c);
     }
 }
 
@@ -357,11 +425,11 @@ fn stat_card(ui: &mut egui::Ui, c: &C, accent: Color32, label: &str, value: &str
     let available_w = ui.available_width();
     let min_width = (available_w * 0.85).max(80.0);  // At least 80px wide
     
-    Frame::none()
+    Frame::NONE
         .fill(c.card)
         .stroke(Stroke::new(1.0, c.border))
-        .rounding(Rounding::same(6.0))
-        .inner_margin(Margin::symmetric(8.0, 8.0))
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(Margin::symmetric(8, 8))
         .show(ui, |ui| {
             ui.set_clip_rect(ui.max_rect());  // clip to card bounds
             ui.set_min_width(min_width);
@@ -446,7 +514,7 @@ fn render_dashboard(ui: &mut egui::Ui, state: &mut UiState, snap: &Snapshot, app
                             egui::pos2(rect.min.x + i as f32 * bar_w + 1.0, rect.max.y - 14.0 - bar_h),
                             vec2(bar_w - 1.0, bar_h),
                         );
-                        painter.rect_filled(bar_rect, Rounding::same(2.0), c.blue);
+                        painter.rect_filled(bar_rect, CornerRadius::same(2), c.blue);
                         // tooltip on hover
                         if bar_rect.contains(ui.input(|i| i.pointer.hover_pos().unwrap_or_default())) {
                             painter.text(
@@ -474,7 +542,7 @@ fn render_dashboard(ui: &mut egui::Ui, state: &mut UiState, snap: &Snapshot, app
                 section_label(ui, c, t(lang,"chart_latency"));
                 let pts: PlotPoints = snap.latency_history.iter().enumerate().map(|(i,lp)| [i as f64, lp.v]).collect();
                 Plot::new("lat").height(chart_h).show_x(false).show_y(false).show_axes([false,false]).show(ui, |pui| {
-                    pui.line(Line::new(pts).color(c.blue).width(1.5));
+                    pui.line(Line::new("latency", pts).color(c.blue).width(1.5));
                 });
             });
             ui.add_space(6.0);
@@ -511,7 +579,7 @@ fn render_dashboard(ui: &mut egui::Ui, state: &mut UiState, snap: &Snapshot, app
                             egui::pos2(bar_x, rect.center().y - 2.5),
                             vec2(bar_w, 5.0),
                         );
-                        p.rect_filled(bar_rect, Rounding::same(3.0), c.blue);
+                        p.rect_filled(bar_rect, CornerRadius::same(3), c.blue);
                         // Count
                         let cnt_s = format!("{}", cnt);
                         p.text(
@@ -555,7 +623,7 @@ fn render_dashboard(ui: &mut egui::Ui, state: &mut UiState, snap: &Snapshot, app
                     egui::pos2(bar_x, rect.center().y - 5.0),
                     vec2(bar_w, 10.0),
                 );
-                p.rect_filled(bar_rect, Rounding::same(3.0), accent);
+                p.rect_filled(bar_rect, CornerRadius::same(3), accent);
                 // Number – right side, vertically centred
                 let num_val = fmt_num(count);
                 let galley = p.layout_no_wrap(num_val.clone(), egui::FontId::proportional(11.0), c.text2);
@@ -583,16 +651,86 @@ fn render_history(ui: &mut egui::Ui, state: &mut UiState, snap: &Snapshot, lang:
     card_frame(c).show(ui, |ui| {
         ui.set_max_width(ui.available_width());  // Ensure card doesn't exceed available width
         section_label(ui, c, t(lang,"table_history"));
+        
+        // Search and sort controls
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(t(lang,"history_search")).color(c.text2).size(10.0));
+            ui.add(egui::TextEdit::singleline(&mut state.history_search)
+                .hint_text("model/status...")
+                .desired_width(150.0)
+                .font(egui::FontId::proportional(10.0)));
+            
+            ui.separator();
+            
+            // Sort buttons
+            let sort_label = match state.history_sort_by {
+                HistorySortBy::Time => t(lang,"th_time"),
+                HistorySortBy::Tokens => t(lang,"th_tokens"),
+                HistorySortBy::Latency => t(lang,"th_latency"),
+            };
+            let sort_arrow = if state.history_sort_asc { "↑" } else { "↓" };
+            
+            if ui.small_button(RichText::new(format!("{} {}", sort_label, sort_arrow)).color(c.text2).size(10.0)).clicked() {
+                // Cycle through sort options
+                state.history_sort_by = match state.history_sort_by {
+                    HistorySortBy::Time => HistorySortBy::Tokens,
+                    HistorySortBy::Tokens => HistorySortBy::Latency,
+                    HistorySortBy::Latency => HistorySortBy::Time,
+                };
+            }
+            if ui.small_button(RichText::new(sort_arrow).color(c.text2).size(10.0)).clicked() {
+                state.history_sort_asc = !state.history_sort_asc;
+            }
+        });
+        
+        ui.add_space(4.0);
+        
         if snap.history.is_empty() {
             ui.label(RichText::new(t(lang,"empty_history")).color(c.text3));
             return;
         }
 
-        let total = snap.history.len();
+        // Filter and sort history
+        let filtered_indices: Vec<usize> = snap.history.iter().enumerate()
+            .filter(|(_, rec)| {
+                if state.history_search.is_empty() {
+                    return true;
+                }
+                let search_lower = state.history_search.to_lowercase();
+                rec.model.to_lowercase().contains(&search_lower) ||
+                rec.status.to_lowercase().contains(&search_lower) ||
+                rec.input_preview.to_lowercase().contains(&search_lower) ||
+                rec.preview.to_lowercase().contains(&search_lower)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        
+        // Sort indices
+        let mut sorted_indices = filtered_indices;
+        sorted_indices.sort_by(|&a, &b| {
+            let rec_a = &snap.history[a];
+            let rec_b = &snap.history[b];
+            let cmp = match state.history_sort_by {
+                HistorySortBy::Time => a.cmp(&b), // Index represents time order
+                HistorySortBy::Tokens => (rec_a.input_tokens + rec_a.output_tokens)
+                    .cmp(&(rec_b.input_tokens + rec_b.output_tokens)),
+                HistorySortBy::Latency => rec_a.latency.partial_cmp(&rec_b.latency)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            };
+            if state.history_sort_asc { cmp } else { cmp.reverse() }
+        });
+        
+        if sorted_indices.is_empty() {
+            ui.label(RichText::new(t(lang,"history_no_results")).color(c.text3));
+            return;
+        }
+
+        let total = sorted_indices.len();
         let total_pages = (total + state.page_size - 1) / state.page_size;
         if state.history_page > total_pages { state.history_page = total_pages.max(1); }
         let start = (state.history_page - 1) * state.page_size;
         let end = (start + state.page_size).min(total);
+        let page_indices = &sorted_indices[start..end];
 
         // Column widths for better display
         let col_widths = [70.0, 100.0, 60.0, 60.0, 60.0, 80.0, 120.0, 120.0];
@@ -642,8 +780,8 @@ fn render_history(ui: &mut egui::Ui, state: &mut UiState, snap: &Snapshot, lang:
                     });
                     ui.end_row();
 
-                    // Data rows (reverse order - newest first)
-                    for i in (start..end).rev() {
+                    // Data rows (using sorted and filtered indices)
+                    for &i in page_indices.iter().rev() {
                         if let Some(rec) = snap.history.get(i) {
                             // Time column
                             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -767,10 +905,10 @@ fn render_detail_modal(ctx: &Context, state: &mut UiState, metrics: &Metrics, sn
         .collapsible(false)
         .show(ctx, |ui| {
             // ── Wrap entire content in surface frame for depth ──
-            let surface_frame = Frame::none()
+            let surface_frame = Frame::NONE
                 .fill(c.surface)
-                .rounding(Rounding::same(6.0))
-                .inner_margin(Margin::symmetric(12.0, 10.0));
+                .corner_radius(CornerRadius::same(6))
+                .inner_margin(Margin::symmetric(12, 10));
             surface_frame.show(ui, |ui| {
             // ── Meta info row ── use text for labels, blue for values ──
             ui.horizontal(|ui| {
@@ -824,19 +962,19 @@ fn render_detail_modal(ctx: &Context, state: &mut UiState, metrics: &Metrics, sn
                                 let color = role_colors.iter().find(|(r,_)| *r == msg.role.as_str()).map(|&(_,clr)| clr).unwrap_or(c.text2);
                                 // Role badge strip at top
                                 let role_bg = color.linear_multiply(0.12);
-                                Frame::none()
+                                Frame::NONE
                                     .fill(c.card)
                                     .stroke(Stroke::new(1.0, color.linear_multiply(0.4)))
-                                    .rounding(Rounding::same(6.0))
-                                    .inner_margin(Margin::symmetric(12.0, 10.0))
+                                    .corner_radius(CornerRadius::same(6))
+                                    .inner_margin(Margin::symmetric(12, 10))
                                     .show(ui, |ui| {
                                         // Colored role badge + number
                                         ui.horizontal(|ui| {
                                             ui.label(RichText::new(format!("#{}", i+1)).color(c.text3).size(11.0).monospace());
-                                            Frame::none()
+                                            Frame::NONE
                                                 .fill(role_bg)
-                                                .rounding(Rounding::same(3.0))
-                                                .inner_margin(Margin::symmetric(8.0, 3.0))
+                                                .corner_radius(CornerRadius::same(3))
+                                                .inner_margin(Margin::symmetric(8, 3))
                                                 .show(ui, |ui| {
                                                     ui.label(RichText::new(msg.role.to_uppercase()).color(color).size(12.0).strong());
                                                 });
@@ -896,7 +1034,6 @@ fn render_detail_modal(ctx: &Context, state: &mut UiState, metrics: &Metrics, sn
 
 fn render_config(ui: &mut egui::Ui, state: &mut UiState, cm: &ConfigManager, ss: &SecureConfigStore, app_state: &Arc<AppState>, lang: Lang, c: &C, viewport_h: f32) {
     if !state.config_loaded {
-        state.config_editor = cm.read();
         state.current_config = cm.get_current_model();
         state.saved_configs = ss.list_configs();
         state.config_loaded = true;
@@ -916,7 +1053,38 @@ fn render_config(ui: &mut egui::Ui, state: &mut UiState, cm: &ConfigManager, ss:
         // ── Quick Config ──
         card_frame(c).show(ui, |ui| {
             section_label(ui, c, t(lang,"config_quick"));
-            // Row 1: name + model — place labels first, then fill remaining space
+            
+            // Row 0: Provider preset selector
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(t(lang,"config_preset")).color(c.text2).size(11.0));
+                egui::ComboBox::from_id_salt("provider_preset")
+                    .selected_text(if state.selected_preset == "custom" {
+                        t(lang,"config_preset_custom").to_string()
+                    } else {
+                        state.presets.iter()
+                            .find(|p| p.name == state.selected_preset)
+                            .map(|p| p.display_name.to_string())
+                            .unwrap_or_else(|| t(lang,"config_preset_custom").to_string())
+                    })
+                    .show_ui(ui, |ui| {
+                        for preset in &state.presets {
+                            ui.selectable_value(&mut state.selected_preset, preset.name.to_string(), preset.display_name);
+                        }
+                        ui.selectable_value(&mut state.selected_preset, "custom".to_string(), t(lang,"config_preset_custom"));
+                    });
+                
+                // Auto-fill when preset changes
+                if state.selected_preset != "custom" {
+                    if let Some(preset) = state.presets.iter().find(|p| p.name == state.selected_preset) {
+                        if state.config_base_url.is_empty() || state.config_base_url == preset.base_url {
+                            state.config_base_url = preset.base_url.to_string();
+                            state.config_model = preset.default_model.to_string();
+                        }
+                    }
+                }
+            });
+            
+            // Row 1: name + model
             ui.horizontal(|ui| {
                 ui.label(RichText::new(t(lang,"config_name")).color(c.text2).size(11.0));
                 let remaining = ui.available_size_before_wrap();
@@ -925,24 +1093,25 @@ fn render_config(ui: &mut egui::Ui, state: &mut UiState, cm: &ConfigManager, ss:
                 let remaining2 = ui.available_size_before_wrap();
                 ui.add(egui::TextEdit::singleline(&mut state.config_model).hint_text("gpt-4o").desired_width(remaining2.x));
             });
-            // Row 2: base_url — label first, input fills remaining
+            // Row 2: base_url
             ui.horizontal(|ui| {
                 ui.label(RichText::new(t(lang,"config_base_url")).color(c.text2).size(11.0));
                 let remaining = ui.available_size_before_wrap();
                 ui.add(egui::TextEdit::singleline(&mut state.config_base_url).hint_text("https://api.openai.com/v1").desired_width(remaining.x));
             });
-            // Row 3: api_key — label first, input fills remaining
+            // Row 3: api_key
             ui.horizontal(|ui| {
                 ui.label(RichText::new(t(lang,"config_api_key")).color(c.text2).size(11.0));
                 let remaining = ui.available_size_before_wrap();
                 ui.add(egui::TextEdit::singleline(&mut state.config_api_key).password(true).hint_text("sk-...").desired_width(remaining.x));
             });
             ui.add_space(4.0);
+            
+            // Button row: Apply + Reload + Test Connection
             ui.horizontal(|ui| {
                 if ui.button(RichText::new(t(lang,"btn_apply")).color(c.green).size(12.0)).clicked() {
                     if !state.config_base_url.is_empty() && !state.config_model.is_empty() {
                         cm.apply_model(&state.config_model, PROXY_PROVIDER, PROXY_BASE_URL, &state.config_api_key);
-                        // Update proxy upstream dynamically from user input
                         let upstream = format!("{}/chat/completions", state.config_base_url.trim_end_matches('/'));
                         app_state.set_upstream(upstream, state.config_api_key.clone());
                         app_state.set_upstream_model(state.config_model.clone());
@@ -952,7 +1121,6 @@ fn render_config(ui: &mut egui::Ui, state: &mut UiState, cm: &ConfigManager, ss:
                         } else {
                             t(lang,"toast_apply_ok")
                         };
-                        state.config_editor = cm.read();
                         state.current_config = cm.get_current_model();
                         state.saved_configs = ss.list_configs();
                         state.toast_msg = Some(toast_key.to_string());
@@ -960,11 +1128,60 @@ fn render_config(ui: &mut egui::Ui, state: &mut UiState, cm: &ConfigManager, ss:
                     }
                 }
                 if ui.button(RichText::new(t(lang,"btn_reload")).color(c.text2).size(12.0)).clicked() {
-                    state.config_editor = cm.read();
                     state.current_config = cm.get_current_model();
                     state.saved_configs = ss.list_configs();
                 }
+                
+                // Test Connection button
+                ui.separator();
+                let test_btn_text = if state.connectivity_testing {
+                    t(lang,"btn_testing")
+                } else {
+                    t(lang,"btn_test")
+                };
+                let test_btn = ui.add_enabled(
+                    !state.connectivity_testing && !state.config_base_url.is_empty() && !state.config_api_key.is_empty(),
+                    egui::Button::new(RichText::new(test_btn_text).color(c.blue).size(12.0))
+                );
+                if test_btn.clicked() {
+                    state.connectivity_testing = true;
+                    state.connectivity_result = None;
+                    // Spawn async task for connectivity test
+                    let base_url = state.config_base_url.clone();
+                    let api_key = state.config_api_key.clone();
+                    let app_state_clone = app_state.clone();
+                    let ctx = ui.ctx().clone();
+                    std::thread::spawn(move || {
+                        let rt = tokio::runtime::Runtime::new().unwrap();
+                        let result = rt.block_on(connectivity::test_connectivity(&app_state_clone.http_client, &base_url, &api_key));
+                        // Store result in AppState
+                        *app_state_clone.connectivity_result.write().unwrap() = Some(result);
+                        ctx.request_repaint();
+                    });
+                }
             });
+            
+            // Check for connectivity test result from AppState
+            if let Some(result) = app_state.connectivity_result.read().unwrap().clone() {
+                state.connectivity_testing = false;
+                state.connectivity_result = Some(result.clone());
+                // Clear the result from AppState so we don't re-read it
+                *app_state.connectivity_result.write().unwrap() = None;
+            }
+            
+            // Show connectivity test result
+            if let Some(ref result) = state.connectivity_result {
+                ui.add_space(4.0);
+                if result.success {
+                    ui.label(RichText::new(format!("✓ {} ({}ms)", t(lang,"test_success"), result.latency_ms)).color(c.green).size(11.0));
+                    if !result.models.is_empty() {
+                        ui.label(RichText::new(format!("{}: {}", t(lang,"test_models"), result.models.join(", "))).color(c.text2).size(10.0));
+                    }
+                } else {
+                    ui.label(RichText::new(format!("✗ {}: {}", t(lang,"test_failed"), result.error_message.as_deref().unwrap_or("Unknown error"))).color(c.red).size(11.0));
+                }
+            }
+            
             ui.add_space(4.0);
             ui.label(RichText::new(format!("{}: {} {} {} @ {}", t(lang,"current"), state.current_config.model, t(lang,"via"), state.current_config.provider, state.current_config.base_url)).color(c.green).size(10.0));
         });
@@ -986,11 +1203,11 @@ fn render_config(ui: &mut egui::Ui, state: &mut UiState, cm: &ConfigManager, ss:
                         (c.elev, c.border, "")
                     };
                     let stroke_w = if is_active { 2.0 } else { 1.0 };
-                    Frame::none()
+                    Frame::NONE
                         .fill(fill)
                         .stroke(Stroke::new(stroke_w, stroke_color))
-                        .rounding(Rounding::same(4.0))
-                        .inner_margin(Margin::same(6.0))
+                        .corner_radius(CornerRadius::same(4))
+                        .inner_margin(Margin::same(6))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 // Left accent bar for active config
@@ -1015,15 +1232,23 @@ fn render_config(ui: &mut egui::Ui, state: &mut UiState, cm: &ConfigManager, ss:
                                             let upstream = format!("{}/chat/completions", full.base_url.trim_end_matches('/'));
                                             app_state.set_upstream(upstream, full.api_key);
                                             app_state.set_upstream_model(full.model.clone());
-                                            state.config_editor = cm.read();
                                             state.current_config = cm.get_current_model();
                                             state.toast_msg = Some(t(lang,"toast_apply_ok").to_string());
                                             state.toast_time = ui.ctx().input(|i| i.time);
                                         }
                                     }
+                                    if ui.small_button(RichText::new(t(lang,"btn_edit")).color(c.blue).size(10.0)).clicked() {
+                                        // Backfill form with this config's values
+                                        if let Some(full) = ss.get_config_full(&cfg.name) {
+                                            state.config_name = cfg.name.clone();
+                                            state.config_model = full.model.clone();
+                                            state.config_base_url = full.base_url.clone();
+                                            state.config_api_key = full.api_key.clone();
+                                            state.selected_preset = "custom".to_string();
+                                        }
+                                    }
                                     if ui.small_button(RichText::new(t(lang,"btn_delete")).color(c.red).size(10.0)).clicked() {
-                                        ss.delete_config(&cfg.name);
-                                        state.saved_configs = ss.list_configs();
+                                        state.delete_confirm_name = Some(cfg.name.clone());
                                     }
                                 });
                             });
@@ -1035,61 +1260,87 @@ fn render_config(ui: &mut egui::Ui, state: &mut UiState, cm: &ConfigManager, ss:
 
         ui.add_space(8.0);
 
-        // ── Config editor ──
+        // ── Delete Confirmation Dialog ──
+        if let Some(ref name) = state.delete_confirm_name {
+            let name_clone = name.clone();
+            egui::Window::new(t(lang,"delete_confirm_title"))
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ui.ctx(), |ui| {
+                    ui.label(RichText::new(t(lang,"delete_confirm_msg").replace("{}", &name_clone)).size(12.0));
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button(RichText::new(t(lang,"btn_confirm_delete")).color(c.red).size(11.0)).clicked() {
+                            ss.delete_config(&name_clone);
+                            state.saved_configs = ss.list_configs();
+                            state.delete_confirm_name = None;
+                        }
+                        if ui.button(RichText::new(t(lang,"btn_cancel")).color(c.text2).size(11.0)).clicked() {
+                            state.delete_confirm_name = None;
+                        }
+                    });
+                });
+        }
+
+        // ── Proxy Status ──
         card_frame(c).show(ui, |ui| {
             ui.set_max_width(ui.available_width());
-            section_label(ui, c, t(lang,"config_editor"));
+            section_label(ui, c, t(lang,"config_status"));
+
+            let upstream_url = app_state.get_upstream_url();
+            let upstream_model = app_state.get_upstream_model();
+
+            // Local proxy endpoint (what Codex connects to)
+            ui.add_space(2.0);
+            ui.label(RichText::new("← Codex →").color(c.green).size(10.0).strong());
             ui.horizontal(|ui| {
-                ui.set_max_width(ui.available_width());
-                ui.label(RichText::new(cm.config_path_display()).color(c.text3).size(10.0).monospace());
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button(RichText::new(t(lang,"btn_reload")).color(c.text2).size(11.0)).clicked() { state.config_editor = cm.read(); }
-                    if ui.button(RichText::new(t(lang,"btn_save_apply")).color(c.green).size(11.0)).clicked() {
-                        cm.write(&state.config_editor);
-                        state.current_config = cm.get_current_model();
-                        // Always ensure model_provider points to proxy
-                        if state.current_config.provider != PROXY_PROVIDER {
-                            let model = if state.current_config.model.is_empty() {
-                                // Try to get model from saved configs
-                                let saved = ss.list_configs();
-                                saved.first().map(|s| s.model.clone()).unwrap_or_default()
-                            } else {
-                                state.current_config.model.clone()
-                            };
-                            if !model.is_empty() {
-                                cm.apply_model(&model, PROXY_PROVIDER, PROXY_BASE_URL, "");
-                                state.current_config = cm.get_current_model();
-                            }
-                        }
-                        state.config_editor = cm.read();
-                        // Sync upstream from the most recently used saved config
-                        let saved = ss.list_configs();
-                        if let Some(latest) = saved.first() {
-                            if let Some(full) = ss.get_config_full(&latest.name) {
-                                let upstream = format!("{}/chat/completions", full.base_url.trim_end_matches('/'));
-                                app_state.set_upstream(upstream, full.api_key);
-                                app_state.set_upstream_model(full.model.clone());
-                            }
-                        }
-                        state.toast_msg = Some(t(lang,"toast_apply_ok").to_string());
-                        state.toast_time = ui.ctx().input(|i| i.time);
-                    }
-                });
+                let tw = ui.available_width();
+                let lw = (tw * 0.35).min(140.0);
+                ui.set_min_width(lw);
+                ui.label(RichText::new(t(lang,"config_model")).color(c.text2).size(11.0));
+                ui.label(RichText::new(format!("：{}", state.current_config.model)).color(c.text).size(11.0).strong());
             });
+            ui.horizontal(|ui| {
+                let tw = ui.available_width();
+                let lw = (tw * 0.35).min(140.0);
+                ui.set_min_width(lw);
+                ui.label(RichText::new(t(lang,"config_provider")).color(c.text2).size(11.0));
+                ui.label(RichText::new(format!("：{}", state.current_config.provider)).color(c.text).size(11.0));
+            });
+            ui.horizontal(|ui| {
+                let tw = ui.available_width();
+                let lw = (tw * 0.35).min(140.0);
+                ui.set_min_width(lw);
+                ui.label(RichText::new(t(lang,"config_base_url")).color(c.text2).size(11.0));
+                ui.label(RichText::new(format!("：{}", state.current_config.base_url)).color(c.text).size(11.0));
+            });
+
+            ui.add_space(6.0);
+            ui.separator();
             ui.add_space(4.0);
-            ScrollArea::vertical()
-                .max_height((viewport_h * 0.35).clamp(160.0, 500.0))
-                .show(ui, |ui| {
-                    ui.set_max_width(ui.available_width());
-                    ui.add(
-                        egui::TextEdit::multiline(&mut state.config_editor)
-                            .font(egui::TextStyle::Monospace)
-                            .desired_width(ui.available_width())
-                            .code_editor(),
-                    );
+
+            // Upstream forwarding (proxy → actual API)
+            ui.label(RichText::new("→ 上游 →").color(c.blue).size(10.0).strong());
+            ui.horizontal(|ui| {
+                let tw = ui.available_width();
+                let lw = (tw * 0.35).min(140.0);
+                ui.set_min_width(lw);
+                ui.label(RichText::new("Upstream URL").color(c.text2).size(11.0));
+                ui.label(RichText::new(format!("：{}", upstream_url)).color(c.green).size(11.0));
             });
+            ui.horizontal(|ui| {
+                let tw = ui.available_width();
+                let lw = (tw * 0.35).min(140.0);
+                ui.set_min_width(lw);
+                ui.label(RichText::new("Upstream Model").color(c.text2).size(11.0));
+                ui.label(RichText::new(format!("：{}", upstream_model)).color(c.green).size(11.0).strong());
             });
-    });
+
+            ui.add_space(6.0);
+            ui.label(RichText::new(cm.config_path_display()).color(c.text3).size(9.0).monospace());
+        });
+    }); // close ScrollArea
 
     // ── Bottom toast notification (overlay at panel bottom) ──
     if let Some(ref msg) = state.toast_msg {
@@ -1105,11 +1356,11 @@ fn render_config(ui: &mut egui::Ui, state: &mut UiState, cm: &ConfigManager, ss:
         egui::Area::new(egui::Id::new("panel_bottom_toast"))
             .fixed_pos(toast_pos)
             .show(ui.ctx(), |ui| {
-                Frame::none()
+                Frame::NONE
                     .fill(c.green.linear_multiply(0.2))
                     .stroke(Stroke::new(1.5, c.green))
-                    .rounding(Rounding::same(8.0))
-                    .inner_margin(Margin::same(10.0))
+                    .corner_radius(CornerRadius::same(8))
+                    .inner_margin(Margin::same(10))
                     .show(ui, |ui| {
                         ui.set_min_width(toast_w - 20.0);
                         ui.horizontal(|ui| {

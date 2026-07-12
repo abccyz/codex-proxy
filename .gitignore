@@ -4,3 +4,6 @@ __pycache__/
 .DS_Store
 .codegraph/
 *.exe
+proxy-tauri/node_modules/
+proxy-rs/target/
+proxy-tauri/src-tauri/target/

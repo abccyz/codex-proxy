@@ -1,3 +1,4 @@
+use crate::model::ModelVendor;
 use crate::sse::FunctionCall;
 use serde_json::Value;
 
@@ -18,6 +19,10 @@ pub fn extract_text_from_content(content: &Value) -> String {
             let texts: Vec<String> = items
                 .iter()
                 .filter_map(|item| item.as_object())
+                .filter(|obj| {
+                    // Skip reasoning content parts — they are extracted separately as reasoning_content
+                    obj.get("type").and_then(|v| v.as_str()) != Some("reasoning")
+                })
                 .filter_map(|obj| {
                     if let Some(t) = obj.get("text").and_then(|v| v.as_str()) {
                         return Some(t.to_string());
@@ -209,8 +214,46 @@ pub fn convert_tools_to_chat_format(tools: &Value) -> Value {
     Value::Array(converted)
 }
 
+/// Extract reasoning_content from a message object.
+/// Checks top-level field first, then content array items (type="reasoning" or reasoning_content field).
+/// For thinking mode models (DeepSeek/Qwen): reasoning_content must always be present.
+fn extract_reasoning_content(obj: &serde_json::Map<String, Value>, vendor: ModelVendor) -> Option<String> {
+    // Check top-level field
+    if let Some(r) = obj.get("reasoning_content").and_then(|v| v.as_str()) {
+        return Some(r.to_string());
+    }
+    // Check content array items
+    if let Some(Value::Array(items)) = obj.get("content") {
+        let mut parts = Vec::new();
+        let mut has_reasoning_part = false;
+        for item in items {
+            if let Some(item_obj) = item.as_object() {
+                if let Some(r) = item_obj.get("reasoning_content").and_then(|v| v.as_str()) {
+                    has_reasoning_part = true;
+                    if !r.is_empty() { parts.push(r.to_string()); }
+                } else if item_obj.get("type").and_then(|v| v.as_str()) == Some("reasoning") {
+                    has_reasoning_part = true;
+                    if let Some(t) = item_obj.get("text").and_then(|v| v.as_str()) {
+                        if !t.is_empty() { parts.push(t.to_string()); }
+                    }
+                }
+            }
+        }
+        if !parts.is_empty() {
+            return Some(parts.join("\n"));
+        }
+        // Return empty string if reasoning content part exists
+        // (thinking mode requires reasoning_content on every assistant message)
+        if has_reasoning_part && vendor.requires_reasoning_content() {
+            return Some(String::new());
+        }
+    }
+    None
+}
+
 /// Convert Responses API input to Chat Completions messages format.
-pub fn convert_input_to_messages(input: &Value) -> Vec<Value> {
+pub fn convert_input_to_messages(input: &Value, model: &str) -> Vec<Value> {
+    let vendor = ModelVendor::from_model_name(model);
     match input {
         Value::String(s) => {
             return vec![serde_json::json!({"role": "user", "content": s})];
@@ -232,11 +275,13 @@ pub fn convert_input_to_messages(input: &Value) -> Vec<Value> {
                         let content = obj.get("content").unwrap_or(&default_content);
                         let text = extract_text_from_content(content);
                         
-                        // For assistant messages, preserve reasoning_content if present (required by Qwen thinking mode)
+                        // For assistant messages, include reasoning_content based on vendor requirements
                         if role == "assistant" {
-                            if let Some(reasoning) = obj.get("reasoning_content") {
+                            if vendor.requires_reasoning_content() {
+                                let reasoning = extract_reasoning_content(obj, vendor)
+                                    .unwrap_or_else(|| String::new());
                                 messages.push(serde_json::json!({
-                                    "role": role, 
+                                    "role": role,
                                     "content": text,
                                     "reasoning_content": reasoning
                                 }));
@@ -259,7 +304,7 @@ pub fn convert_input_to_messages(input: &Value) -> Vec<Value> {
                             .get("arguments")
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
-                        messages.push(serde_json::json!({
+                        let mut fc_msg = serde_json::json!({
                             "role": "assistant",
                             "content": null,
                             "tool_calls": [{
@@ -270,7 +315,15 @@ pub fn convert_input_to_messages(input: &Value) -> Vec<Value> {
                                     "arguments": arguments
                                 }
                             }]
-                        }));
+                        });
+                        // Models requiring reasoning_content on assistant messages
+                        if vendor.requires_reasoning_content() {
+                            fc_msg.as_object_mut().unwrap().insert(
+                                "reasoning_content".to_string(),
+                                Value::String(String::new()),
+                            );
+                        }
+                        messages.push(fc_msg);
                     }
                     // Function call outputs
                     else if item_type == "function_call_output" {

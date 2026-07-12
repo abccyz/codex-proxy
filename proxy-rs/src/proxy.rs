@@ -18,7 +18,39 @@ use uuid::Uuid;
 use crate::convert::*;
 use crate::sse::{make_item_id, make_req_id, make_response_id, truncate_utf8, StreamCleanupGuard, ToolCallAcc, FunctionCall};
 use crate::metrics::{InputDetail, SharedMetrics};
+use crate::model::ModelVendor;
 // use crate::types::*; // Will be integrated in next phase
+
+/// Build an output text message item, conditionally including reasoning_content
+/// based on model vendor. Each vendor has different requirements for reasoning_content.
+fn build_text_output_item(item_id: &str, text: &str, reasoning_content: &str, model: &str) -> Value {
+    let vendor = ModelVendor::from_model_name(model);
+    let should_include = match vendor.build_reasoning_output(reasoning_content) {
+        Some(r) => Some(r),
+        None => None,
+    };
+
+    let mut content_parts: Vec<Value> = Vec::new();
+    if let Some(reasoning) = should_include {
+        content_parts.push(serde_json::json!({
+            "type": "reasoning",
+            "text": reasoning
+        }));
+    }
+    content_parts.push(serde_json::json!({
+        "type": "output_text",
+        "text": text,
+        "annotations": []
+    }));
+
+    serde_json::json!({
+        "type": "message",
+        "id": item_id,
+        "role": "assistant",
+        "status": "completed",
+        "content": content_parts,
+    })
+}
 
 /// Kill process occupying the specified port
 fn kill_port_occupier(port: u16) {
@@ -57,6 +89,8 @@ pub struct AppState {
     pub proxy_running: Arc<AtomicBool>,
     #[allow(dead_code)]
     pub log_level: tracing::Level,
+    /// Connectivity test result (shared between UI and async task)
+    pub connectivity_result: RwLock<Option<crate::connectivity::ConnectivityResult>>,
 }
 
 impl AppState {
@@ -184,10 +218,18 @@ async fn handle_responses(
 
     let tools = body.get("tools").cloned().unwrap_or(Value::Array(vec![]));
 
-    // Convert input to messages
+    // Determine the actual upstream model BEFORE converting messages.
+    // This is critical: reasoning_content handling depends on the model we're sending to,
+    // not the model Codex thinks it's using.
+    let upstream_model = {
+        let mapped = state.get_upstream_model();
+        if mapped.is_empty() { model.clone() } else { mapped }
+    };
+
+    // Convert input to messages using the ACTUAL upstream model
     let default_input = Value::String(String::new());
     let input = body.get("input").unwrap_or(&default_input);
-    let mut messages = convert_input_to_messages(input);
+    let mut messages = convert_input_to_messages(input, &upstream_model);
 
     // Prepend system message with instructions
     if !instructions.is_empty() {
@@ -196,21 +238,10 @@ async fn handle_responses(
 
     let has_tools = !tools.as_array().map(|a| a.is_empty()).unwrap_or(true);
 
-    // Build upstream payload
-    // Use the configured upstream model if available, otherwise use the model from the request.
-    // This ensures the user's model selection in the config center takes effect.
-    let upstream_model = {
-        let mapped = state.get_upstream_model();
-        if mapped.is_empty() { 
-            model.clone() 
-        } else {
-            // Log model mapping when it differs from request model
-            if mapped != model {
-                tracing::info!("[DEBUG] Model mapping: {} -> {}", model, mapped);
-            }
-            mapped
-        }
-    };
+    // Log model mapping if it differs from request model
+    if upstream_model != model {
+        tracing::info!("[DEBUG] Model mapping: {} -> {}", model, upstream_model);
+    }
     let mut upstream_payload = serde_json::json!({
         "model": &upstream_model,
         "messages": messages,
@@ -467,19 +498,14 @@ async fn handle_normal_response(
 
     let reasoning_content = msg.get("reasoning_content").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
+    let output_item = build_text_output_item(&item_id, &content, &reasoning_content, &actual_model);
+
     let result = serde_json::json!({
         "id": resp_id,
         "object": "response",
         "created_at": created,
         "model": actual_model,
-        "output": [{
-            "type": "message",
-            "id": item_id,
-            "role": "assistant",
-            "status": "completed",
-            "content": [{"type": "output_text", "text": content, "annotations": []}],
-            "reasoning_content": reasoning_content,
-        }],
+        "output": [output_item],
         "status": "completed",
         "usage": {
             "input_tokens": in_tok,
@@ -696,7 +722,7 @@ async fn handle_streaming_response(
         let mut output_items: Vec<Value> = Vec::new();
         let mut next_output_index = 0u32;
 
-        if !full_text.is_empty() {
+        if !full_text.is_empty() || !reasoning_content.is_empty() {
             // content_part.done
             yield Ok(axum::response::sse::Event::default()
                 .event("response.content_part.done")
@@ -708,30 +734,19 @@ async fn handle_streaming_response(
                     "part": {"type": "output_text", "text": &full_text, "annotations": []},
                 })).unwrap()));
 
+            // Build text output item with model-aware reasoning_content
+            let text_item = build_text_output_item(&item_id, &full_text, &reasoning_content, &actual_model);
+
             // output_item.done (text message)
             yield Ok(axum::response::sse::Event::default()
                 .event("response.output_item.done")
                 .data(serde_json::to_string(&serde_json::json!({
                     "type": "response.output_item.done",
                     "output_index": 0,
-                    "item": {
-                        "type": "message",
-                        "id": &item_id,
-                        "role": "assistant",
-                        "status": "completed",
-                        "content": [{"type": "output_text", "text": &full_text, "annotations": []}],
-                        "reasoning_content": &reasoning_content,
-                    },
+                    "item": &text_item,
                 })).unwrap()));
 
-            output_items.push(serde_json::json!({
-                "type": "message",
-                "id": &item_id,
-                "role": "assistant",
-                "status": "completed",
-                "content": [{"type": "output_text", "text": &full_text, "annotations": []}],
-                "reasoning_content": &reasoning_content,
-            }));
+            output_items.push(text_item);
             next_output_index = 1;
         }
 
@@ -777,14 +792,7 @@ async fn handle_streaming_response(
 
         // Ensure at least one output item
         if output_items.is_empty() {
-            output_items.push(serde_json::json!({
-                "type": "message",
-                "id": &item_id,
-                "role": "assistant",
-                "status": "completed",
-                "content": [{"type": "output_text", "text": &full_text, "annotations": []}],
-                "reasoning_content": &reasoning_content,
-            }));
+            output_items.push(build_text_output_item(&item_id, &full_text, &reasoning_content, &actual_model));
         }
 
         // response.completed
@@ -936,7 +944,11 @@ async fn handle_nonstreaming_to_sse(
         let mut output_items: Vec<Value> = Vec::new();
         let mut next_output_index = 0u32;
 
-        if !content_clone.is_empty() {
+        // Emit text item when content or reasoning is present, OR when tool calls exist
+        // (thinking mode models require reasoning_content on every assistant message)
+        let has_function_calls = !function_calls.is_empty();
+        let stream_vendor = ModelVendor::from_model_name(&actual_model);
+        if !content_clone.is_empty() || !reasoning_clone.is_empty() || (has_function_calls && stream_vendor.requires_reasoning_content()) {
             yield Ok(axum::response::sse::Event::default()
                 .event("response.output_item.added")
                 .data(serde_json::to_string(&serde_json::json!({
@@ -961,12 +973,9 @@ async fn handle_nonstreaming_to_sse(
                     "delta": &content_clone,
                 })).unwrap()));
 
-            output_items.push(serde_json::json!({
-                "type": "message", "id": &item_id, "role": "assistant",
-                "status": "completed",
-                "content": [{"type": "output_text", "text": &content_clone, "annotations": []}],
-                "reasoning_content": &reasoning_clone,
-            }));
+            let ns_text_item = build_text_output_item(&item_id, &content_clone, &reasoning_clone, &actual_model);
+
+            output_items.push(ns_text_item.clone());
 
             yield Ok(axum::response::sse::Event::default()
                 .event("response.content_part.done")
@@ -980,10 +989,7 @@ async fn handle_nonstreaming_to_sse(
                 .event("response.output_item.done")
                 .data(serde_json::to_string(&serde_json::json!({
                     "type": "response.output_item.done", "output_index": 0,
-                    "item": {"type": "message", "id": &item_id, "role": "assistant",
-                             "status": "completed",
-                             "content": [{"type": "output_text", "text": &content_clone, "annotations": []}],
-                             "reasoning_content": &reasoning_clone},
+                    "item": &ns_text_item,
                 })).unwrap()));
             next_output_index = 1;
         }
