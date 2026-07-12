@@ -65,7 +65,8 @@ fn apply_config(state: tauri::State<TauriAppState>, name: String) -> Result<(), 
     let cfg = state.secure_store.get_config_full(&name)
         .ok_or_else(|| "Config not found".to_string())?;
     let upstream = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
-    state.config_manager.apply_model(&cfg.model, &cfg.provider, &cfg.base_url, &cfg.api_key);
+    let proxy_base_url = format!("http://127.0.0.1:{}/v1", PROXY_PORT);
+    state.config_manager.apply_model(&cfg.model, &cfg.provider, &proxy_base_url, &cfg.api_key);
     state.proxy_state.set_upstream(upstream, cfg.api_key);
     let model_clone = cfg.model.clone();
     state.proxy_state.set_upstream_model(model_clone);
@@ -95,6 +96,11 @@ fn get_upstream_info(state: tauri::State<TauriAppState>) -> serde_json::Value {
         "url": state.proxy_state.get_upstream_url(),
         "model": state.proxy_state.get_upstream_model(),
     })
+}
+
+#[tauri::command]
+fn clear_session(state: tauri::State<TauriAppState>) {
+    state.proxy_state.metrics.clear_session();
 }
 
 // ── App Entry ──
@@ -152,16 +158,19 @@ pub fn run() {
             // Load initial upstream config from saved store
             let current = config_manager.get_current_model();
             let saved_configs = secure_store.list_configs();
+            let proxy_base_url = format!("http://127.0.0.1:{}/v1", PROXY_PORT);
             let matching_cfg = saved_configs.iter().find(|s| s.model == current.model);
             if let Some(cfg) = matching_cfg {
                 if let Some(full) = secure_store.get_config_full(&cfg.name) {
                     let upstream = format!("{}/chat/completions", full.base_url.trim_end_matches('/'));
+                    config_manager.apply_model(&cfg.model, &cfg.provider, &proxy_base_url, &full.api_key);
                     proxy_state.set_upstream(upstream, full.api_key);
                     proxy_state.set_upstream_model(cfg.model.clone());
                 }
             } else if let Some(first_cfg) = saved_configs.first() {
                 if let Some(full) = secure_store.get_config_full(&first_cfg.name) {
                     let upstream = format!("{}/chat/completions", full.base_url.trim_end_matches('/'));
+                    config_manager.apply_model(&first_cfg.model, &first_cfg.provider, &proxy_base_url, &full.api_key);
                     proxy_state.set_upstream(upstream, full.api_key);
                     proxy_state.set_upstream_model(first_cfg.model.clone());
                 }
@@ -216,6 +225,7 @@ pub fn run() {
             test_connectivity,
             get_proxy_status,
             get_upstream_info,
+            clear_session,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,12 +1,14 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Activity, CheckCircle, XCircle, Clock, Zap, Coins, Wifi, WifiOff, Globe, ArrowRight } from 'lucide-react';
+import { Activity, CheckCircle, XCircle, Clock, Zap, Coins, Wifi, WifiOff, Globe, ArrowRight, Radio } from 'lucide-react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { useApp } from '@/contexts/AppContext';
 import { useMetrics } from '@/contexts/MetricsContext';
 import { t } from '@/lib/i18n';
 import { cn, formatNumber, formatLatency, formatUptime } from '@/lib/utils';
-import type { CurrentConfig } from '@/lib/types';
+import type { CurrentConfig, TaskItem } from '@/lib/types';
 
 function StatCard({ icon: Icon, label, value, sub, colorClass, accentClass }: {
   icon: typeof Activity;
@@ -111,43 +113,6 @@ export default function Dashboard() {
         <StatCard icon={Coins} label={t(lang, 'stat_tokens')} value={stats?.totalTokens ?? '—'} colorClass="" accentClass="text-accent" />
       </div>
 
-      {/* Proxy Status */}
-      <div className="bg-bg-card border border-border rounded-lg p-3">
-        <h2 className="text-xs font-semibold text-text-1 mb-2 flex items-center gap-2">
-          <Globe className="w-3.5 h-3.5 text-blue" />
-          {t(lang, 'config_status')}
-        </h2>
-        {currentConfig && (
-          <div className="space-y-1 text-xs">
-            <div className="flex gap-2">
-              <span className="text-text-3 w-20">{t(lang, 'config_model')}:</span>
-              <span className="text-text-1 font-semibold font-mono">{currentConfig.model}</span>
-            </div>
-            <div className="flex gap-2">
-              <span className="text-text-3 w-20">{t(lang, 'config_preset')}:</span>
-              <span className="text-text-1 font-mono">{currentConfig.provider}</span>
-            </div>
-            <div className="flex gap-2">
-              <span className="text-text-3 w-20">{t(lang, 'config_base_url')}:</span>
-              <span className="text-text-1 font-mono">http://127.0.0.1:8000/v1 <span className="text-text-3">({t(lang, 'config_via')})</span></span>
-            </div>
-            <div className="border-t border-border pt-1.5 mt-1">
-              <div className="flex items-center gap-1.5 text-text-3 text-[10px] mb-1 font-semibold">
-                <ArrowRight className="w-3 h-3 text-accent" /> {t(lang, 'upstream_title')}
-              </div>
-              <div className="flex gap-2">
-                <span className="text-text-3 w-20">{t(lang, 'upstream_url')}:</span>
-                <span className="text-text-1 font-mono text-[11px]">{upstreamUrl}</span>
-              </div>
-              <div className="flex gap-2">
-                <span className="text-text-3 w-20">{t(lang, 'upstream_model')}:</span>
-                <span className="text-accent font-semibold font-mono">{upstreamModel}</span>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
       {/* Info bar */}
       {snapshot && (
         <div className="flex items-center gap-4 text-[11px] text-text-2 font-mono">
@@ -160,12 +125,90 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Charts Row 1 */}
+      {/* Proxy Status + Live Stream */}
       <div className="grid grid-cols-2 gap-2">
-        <div className="bg-bg-card border border-border rounded-lg p-2.5">
-          <div className="text-[10px] text-text-3 uppercase tracking-wider font-semibold mb-1">
-            {t(lang, 'chart_throughput')}
+        {/* Proxy Status - half width */}
+        <div className="bg-bg-card border border-border rounded-lg p-3">
+          <h2 className="text-xs font-semibold text-text-1 mb-2 flex items-center gap-2">
+            <Globe className="w-3.5 h-3.5 text-blue" />
+            {t(lang, 'config_status')}
+          </h2>
+          {currentConfig && (
+            <div className="space-y-1 text-xs">
+              <div className="flex gap-2">
+                <span className="text-text-3 w-20">{t(lang, 'config_model')}:</span>
+                <span className="text-text-1 font-semibold font-mono">{currentConfig.model}</span>
+              </div>
+              <div className="flex gap-2">
+                <span className="text-text-3 w-20">{t(lang, 'config_preset')}:</span>
+                <span className="text-text-1 font-mono">{currentConfig.provider}</span>
+              </div>
+              <div className="flex gap-2">
+                <span className="text-text-3 w-20">{t(lang, 'config_base_url')}:</span>
+                <span className="text-text-1 font-mono">http://127.0.0.1:8000/v1 <span className="text-text-3">({t(lang, 'config_via')})</span></span>
+              </div>
+              <div className="border-t border-border pt-1.5 mt-1">
+                <div className="flex items-center gap-1.5 text-text-3 text-[10px] mb-1 font-semibold">
+                  <ArrowRight className="w-3 h-3 text-accent" /> {t(lang, 'upstream_title')}
+                </div>
+                <div className="flex gap-2">
+                  <span className="text-text-3 w-20">{t(lang, 'upstream_url')}:</span>
+                  <span className="text-text-1 font-mono text-[11px]">{upstreamUrl}</span>
+                </div>
+                <div className="flex gap-2">
+                  <span className="text-text-3 w-20">{t(lang, 'upstream_model')}:</span>
+                  <span className="text-accent font-semibold font-mono">{upstreamModel}</span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Session - half width */}
+        <div className="bg-bg-card border border-border rounded-lg p-3">
+          <div className="flex items-center gap-2 mb-2">
+            {snapshot?.live_stream?.finished ? (
+              <CheckCircle className="w-3.5 h-3.5 text-text-3" />
+            ) : (
+              <Radio className={cn("w-3.5 h-3.5", snapshot?.live_stream ? "text-accent animate-pulse" : "text-text-3")} />
+            )}
+            <span className="text-xs font-semibold text-text-1">{t(lang, 'live_stream')}</span>
+            {snapshot?.live_stream && (
+              <span className="text-[10px] text-text-3 font-mono ml-auto">
+                {snapshot.live_stream.model}
+              </span>
+            )}
+            {snapshot?.live_stream?.accumulated && (
+              <button
+                onClick={() => invoke('clear_session')}
+                className="text-[10px] text-text-3 hover:text-accent transition-colors ml-1"
+                title={t(lang, 'clear_session')}
+              >
+                {t(lang, 'clear_session')}
+              </button>
+            )}
           </div>
+          {snapshot?.live_stream?.accumulated ? (
+            <>
+              {snapshot.live_stream.tasks.length > 0 && (
+                <TaskProgress tasks={snapshot.live_stream.tasks} />
+              )}
+              <LiveStreamMarkdown content={snapshot.live_stream.accumulated} />
+            </>
+          ) : (
+            <div className="text-xs text-text-3 py-6 text-center italic">Waiting for session...</div>
+          )}
+        </div>
+      </div>
+
+      {/* Runtime Charts */}
+      <div>
+        <div className="text-[10px] text-text-3 uppercase tracking-wider font-semibold mb-1.5">运行时</div>
+        <div className="grid grid-cols-2 gap-2">
+          <div className="bg-bg-card border border-border rounded-lg p-2.5">
+            <div className="text-[10px] text-text-3 uppercase tracking-wider font-semibold mb-1">
+              {t(lang, 'chart_throughput')}
+            </div>
           <ResponsiveContainer width="100%" height={110}>
             <AreaChart data={throughputData}>
               <defs>
@@ -197,6 +240,7 @@ export default function Dashboard() {
             </LineChart>
           </ResponsiveContainer>
         </div>
+      </div>
       </div>
 
       {/* Charts Row 2 */}
@@ -231,24 +275,126 @@ export default function Dashboard() {
           </ResponsiveContainer>
         </div>
       </div>
+    </div>
+  );
+}
 
-      {/* Live Stream */}
-      {snapshot?.live_stream && (
-        <div className="bg-bg-card border border-accent/30 rounded-lg p-3">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse-dot" />
-            <span className="text-[10px] text-text-3 uppercase tracking-wider font-semibold">
-              {t(lang, 'live_stream')}
+/**
+ * Task progress bar for session panel.
+ * Displays progress when tasks are detected in the content.
+ */
+function TaskProgress({ tasks }: { tasks: TaskItem[] }) {
+  const done = tasks.filter(t => t.done).length;
+  const total = tasks.length;
+  const percent = total > 0 ? Math.round((done / total) * 100) : 0;
+
+  return (
+    <div className="mb-2 p-2 bg-bg-elev/50 border border-border rounded">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[10px] text-text-3 font-semibold uppercase tracking-wider">Task Progress</span>
+        <span className="text-[10px] font-mono text-text-2">{done}/{total} ({percent}%)</span>
+      </div>
+      <div className="h-1.5 bg-bg-card rounded-full overflow-hidden">
+        <div
+          className="h-full bg-accent transition-all duration-300"
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+      <div className="mt-1.5 space-y-0.5 max-h-20 overflow-auto">
+        {tasks.map((task, i) => (
+          <div key={i} className="flex items-start gap-1.5 text-[10px]">
+            <span className={task.done ? 'text-accent' : 'text-text-3'}>
+              {task.done ? '✓' : '○'}
             </span>
-            <span className="text-[10px] text-text-3 font-mono ml-auto">
-              {snapshot.live_stream.model} · {snapshot.live_stream.elapsed_secs.toFixed(1)}s
+            <span className={task.done ? 'text-text-3 line-through' : 'text-text-2'}>
+              {task.text}
             </span>
           </div>
-          <pre className="text-xs font-mono text-text-2 whitespace-pre-wrap max-h-32 overflow-auto leading-relaxed">
-            {snapshot.live_stream.accumulated || <span className="text-text-3 italic">Waiting for content...</span>}
-          </pre>
-        </div>
-      )}
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Throttled Markdown renderer for live stream.
+ * Updates at most every 100ms to avoid excessive re-renders during streaming.
+ */
+const MAX_DISPLAY_CHARS = 4000; // Limit displayed content for Markdown rendering performance
+
+function LiveStreamMarkdown({ content }: { content: string }) {
+  const [displayed, setDisplayed] = useState(content);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastUpdateRef = useRef(0);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const now = Date.now();
+    const elapsed = now - lastUpdateRef.current;
+    const throttleMs = 100;
+
+    const truncated = content.length > MAX_DISPLAY_CHARS
+      ? '...\n' + content.slice(content.length - MAX_DISPLAY_CHARS)
+      : content;
+
+    if (elapsed >= throttleMs) {
+      setDisplayed(truncated);
+      lastUpdateRef.current = now;
+    } else {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => {
+        setDisplayed(truncated);
+        lastUpdateRef.current = Date.now();
+      }, throttleMs - elapsed);
+    }
+  }, [content]);
+
+  // Auto-scroll to bottom when content updates
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [displayed]);
+
+  return (
+    <div ref={scrollRef} className="max-h-48 overflow-auto text-xs text-text-2 leading-relaxed">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          p: ({ children }) => <p className="mb-1.5 last:mb-0">{children}</p>,
+          h1: ({ children }) => <h1 className="text-sm font-bold text-text-1 mb-1.5">{children}</h1>,
+          h2: ({ children }) => <h2 className="text-xs font-bold text-text-1 mb-1">{children}</h2>,
+          h3: ({ children }) => <h3 className="text-xs font-semibold text-text-1 mb-1">{children}</h3>,
+          ul: ({ children }) => <ul className="list-disc pl-4 mb-1.5">{children}</ul>,
+          ol: ({ children }) => <ol className="list-decimal pl-4 mb-1.5">{children}</ol>,
+          li: ({ children }) => <li className="mb-0.5">{children}</li>,
+          code: ({ className, children, ...props }) => {
+            const isInline = !className;
+            return isInline
+              ? <code className="bg-bg-elev px-1 py-0.5 rounded text-[11px] font-mono text-text-1" {...props}>{children}</code>
+              : <code className="text-[11px] font-mono text-text-1" {...props}>{children}</code>;
+          },
+          pre: ({ children }) => (
+            <pre className="bg-bg-elev p-2 rounded text-[11px] font-mono text-text-1 overflow-x-auto mb-1.5 whitespace-pre-wrap">
+              {children}
+            </pre>
+          ),
+          blockquote: ({ children }) => (
+            <blockquote className="border-l-2 border-accent pl-2 text-text-3 italic mb-1.5">{children}</blockquote>
+          ),
+          a: ({ href, children }) => (
+            <a href={href} className="text-accent underline" target="_blank" rel="noopener noreferrer">{children}</a>
+          ),
+          table: ({ children }) => (
+            <div className="overflow-x-auto mb-1.5"><table className="border-collapse text-[11px]">{children}</table></div>
+          ),
+          th: ({ children }) => <th className="border border-border px-2 py-0.5 bg-bg-elev font-semibold text-text-1">{children}</th>,
+          td: ({ children }) => <td className="border border-border px-2 py-0.5">{children}</td>,
+        }}
+      >
+        {displayed || 'Waiting for content...'}
+      </ReactMarkdown>
     </div>
   );
 }

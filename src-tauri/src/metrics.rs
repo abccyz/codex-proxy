@@ -6,13 +6,36 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-struct LiveStream { model: String, content: String, start_time: Instant }
+struct LiveStream { model: String, content: String, start_time: Instant, end_time: Option<Instant> }
 
 const MAX_HISTORY: usize = 100;
 const MAX_FULL_DETAIL: usize = 30;
+const MAX_LIVE_STREAM_CONTENT: usize = 65536; // 64KB limit for session content
+
+fn current_time_tag() -> String {
+    Local::now().format("[%H:%M:%S]").to_string()
+}
 
 fn truncate_str(s: &str, max_chars: usize) -> String {
     if s.chars().count() <= max_chars { s.to_string() } else { format!("{}...", s.chars().take(max_chars).collect::<String>()) }
+}
+
+/// Parse markdown task list from content: `- [ ] task` or `- [x] task`
+fn parse_tasks(content: &str) -> Vec<TaskItem> {
+    let mut tasks = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("- [ ] ") {
+            tasks.push(TaskItem { text: rest.trim().to_string(), done: false });
+        } else if let Some(rest) = trimmed.strip_prefix("- [x] ") {
+            tasks.push(TaskItem { text: rest.trim().to_string(), done: true });
+        } else if let Some(rest) = trimmed.strip_prefix("* [ ] ") {
+            tasks.push(TaskItem { text: rest.trim().to_string(), done: false });
+        } else if let Some(rest) = trimmed.strip_prefix("* [x] ") {
+            tasks.push(TaskItem { text: rest.trim().to_string(), done: true });
+        }
+    }
+    tasks
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -39,7 +62,10 @@ impl HistoryRecord {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct LiveStreamSnapshot { pub model: String, pub accumulated: String, pub elapsed_secs: f64 }
+pub struct TaskItem { pub text: String, pub done: bool }
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LiveStreamSnapshot { pub model: String, pub accumulated: String, pub elapsed_secs: f64, pub finished: bool, pub tasks: Vec<TaskItem> }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Snapshot {
@@ -81,19 +107,51 @@ impl Metrics {
 
     pub fn stream_begin(&self, model: String) {
         self.active_streams.fetch_add(1, Ordering::AcqRel);
-        *self.live_stream.lock() = Some(LiveStream { model, content: String::new(), start_time: Instant::now() });
+        let mut live = self.live_stream.lock();
+        let prev_content = live.as_ref().map(|l| l.content.clone()).unwrap_or_default();
+        let time_tag = current_time_tag();
+        let mut new_content = prev_content;
+        if !new_content.is_empty() && !new_content.ends_with('\n') {
+            new_content.push('\n');
+        }
+        new_content.push_str(&format!("\n---\n**{}**\n\n", time_tag));
+        *live = Some(LiveStream { model, content: new_content, start_time: Instant::now(), end_time: None });
+        drop(live);
         self.generation.fetch_add(1, Ordering::Release);
     }
 
     pub fn stream_chunk(&self, chunk: &str) {
-        if let Some(ref mut live) = *self.live_stream.lock() { live.content.push_str(chunk); }
+        if let Some(ref mut live) = *self.live_stream.lock() {
+            if live.content.len() < MAX_LIVE_STREAM_CONTENT {
+                live.content.push_str(chunk);
+            }
+        }
+        self.generation.fetch_add(1, Ordering::Release);
+    }
+
+    pub fn stream_tool_call(&self, tool_name: &str) {
+        if let Some(ref mut live) = *self.live_stream.lock() {
+            if live.content.len() < MAX_LIVE_STREAM_CONTENT {
+                if !live.content.is_empty() && !live.content.ends_with('\n') {
+                    live.content.push('\n');
+                }
+                let time_tag = current_time_tag();
+                live.content.push_str(&format!("\n**{} \u{1f527} Tool Call: `{}`**\n\n", time_tag, tool_name));
+            }
+        }
         self.generation.fetch_add(1, Ordering::Release);
     }
 
     pub fn stream_end(&self) {
-        *self.live_stream.lock() = None;
+        // Mark stream as ended but keep content visible
+        if let Some(ref mut live) = *self.live_stream.lock() { live.end_time = Some(Instant::now()); }
         let prev = self.active_streams.fetch_sub(1, Ordering::AcqRel);
         if prev == 0 { self.active_streams.store(0, Ordering::Release); }
+        self.generation.fetch_add(1, Ordering::Release);
+    }
+
+    pub fn clear_session(&self) {
+        *self.live_stream.lock() = None;
         self.generation.fetch_add(1, Ordering::Release);
     }
 
@@ -143,7 +201,8 @@ impl Metrics {
                 if cached_gen == gen {
                     let live = self.live_stream.lock();
                     if let Some(ref li) = *live {
-                        let ls = Some(LiveStreamSnapshot { model: li.model.clone(), accumulated: li.content.clone(), elapsed_secs: li.start_time.elapsed().as_secs_f64() });
+                        let tasks = parse_tasks(&li.content);
+                        let ls = Some(LiveStreamSnapshot { model: li.model.clone(), accumulated: li.content.clone(), elapsed_secs: li.start_time.elapsed().as_secs_f64(), finished: li.end_time.is_some(), tasks });
                         drop(live);
                         let mut snap = cs.clone();
                         snap.live_stream = ls;
@@ -167,7 +226,10 @@ impl Metrics {
         let recent_count: u64 = hist.throughput.iter().filter(|tp| now - tp.t * 60 < 300).map(|tp| tp.c).sum();
         let recent_minutes = hist.throughput.iter().filter(|tp| now - tp.t * 60 < 300).count().max(1) as f64;
         let rpm = recent_count as f64 / recent_minutes.min(5.0).max(1.0);
-        let live_stream = self.live_stream.lock().as_ref().map(|live| LiveStreamSnapshot { model: live.model.clone(), accumulated: live.content.clone(), elapsed_secs: live.start_time.elapsed().as_secs_f64() });
+        let live_stream = self.live_stream.lock().as_ref().map(|live| {
+            let tasks = parse_tasks(&live.content);
+            LiveStreamSnapshot { model: live.model.clone(), accumulated: live.content.clone(), elapsed_secs: live.start_time.elapsed().as_secs_f64(), finished: live.end_time.is_some(), tasks }
+        });
         let snap = Snapshot {
             uptime, total, success, failed, active_streams,
             avg_latency: (avg_latency * 100.0).round() / 100.0,
