@@ -211,6 +211,7 @@ function GlobalCards({ summary, lang: lang_ }: { summary: GlobalSummary | null; 
 }
 
 const DIMENSIONS: { id: StatsDimension; labelKey: string }[] = [
+  { id: 'hour', labelKey: 'stats_dimension_hour' },
   { id: 'day', labelKey: 'stats_dimension_day' },
   { id: 'week', labelKey: 'stats_dimension_week' },
   { id: 'month', labelKey: 'stats_dimension_month' },
@@ -411,10 +412,11 @@ function ChartCard({ title, children }: { title: string; children: React.ReactNo
 
 function formatPeriodLabel(period: string, dimension: StatsDimension): string {
   switch (dimension) {
-    case 'day': return period.slice(5);
-    case 'week': return period.slice(6);
-    case 'month': return period.slice(2);
-    case 'year': return period;
+    case 'hour': return period.slice(11) + ':00';   // "14:00" from "2026-07-13-14"
+    case 'day': return period.slice(5);              // "07-13"
+    case 'week': return period.slice(6);              // "W28" from "2026-W28"
+    case 'month': return period.slice(5);             // "07" from "2026-07"
+    case 'year': return period;                       // "2026"
     default: return period;
   }
 }

@@ -9,7 +9,7 @@ const MAX_RETENTION_DAYS: i64 = 90;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DailyRecord {
-    pub date: String,          // "2026-07-13"
+    pub date: String,          // "2026-07-13-14" (date-hour)
     pub model: String,
     pub requests: u64,
     pub success: u64,
@@ -91,7 +91,7 @@ impl HistoryStore {
         }
     }
 
-    /// Append or merge a daily record for a single request
+    /// Append or merge a record for a single request (hourly granularity)
     pub fn record_request(
         &self,
         model: &str,
@@ -100,14 +100,14 @@ impl HistoryStore {
         input_tokens: u64,
         output_tokens: u64,
     ) {
-        let today = Local::now().format("%Y-%m-%d").to_string();
+        let period = Local::now().format("%Y-%m-%d-%H").to_string();
         let latency_ms = (latency_secs * 1000.0) as u64;
         let is_success = status == "success";
 
         let mut records = self.records.lock();
 
-        // Find existing record for today + model
-        if let Some(existing) = records.iter_mut().find(|r| r.date == today && r.model == model) {
+        // Find existing record for this hour + model
+        if let Some(existing) = records.iter_mut().find(|r| r.date == period && r.model == model) {
             existing.requests += 1;
             if is_success {
                 existing.success += 1;
@@ -119,7 +119,7 @@ impl HistoryStore {
             existing.total_latency_ms += latency_ms;
         } else {
             records.push(DailyRecord {
-                date: today,
+                date: period,
                 model: model.to_string(),
                 requests: 1,
                 success: if is_success { 1 } else { 0 },
@@ -134,18 +134,23 @@ impl HistoryStore {
         self.save_to_file();
     }
 
-    /// Get aggregated stats by dimension: "day", "week", "month", "year"
+    /// Get aggregated stats by dimension: "hour", "day", "week", "month", "year"
     pub fn get_stats(&self, dimension: &str) -> Vec<AggregatedStat> {
         let records = self.records.lock().clone();
 
         match dimension {
-            "day" => aggregate_by(&records, |r| r.date.clone()),
+            "hour" => aggregate_by(&records, |r| r.date.clone()),
+            "day" => aggregate_by(&records, |r| {
+                // date is "YYYY-MM-DD-HH" or legacy "YYYY-MM-DD"
+                r.date.chars().take(10).collect::<String>()
+            }),
             "week" => aggregate_by(&records, |r| {
-                if let Ok(d) = NaiveDate::parse_from_str(&r.date, "%Y-%m-%d") {
+                let date_str: String = r.date.chars().take(10).collect();
+                if let Ok(d) = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") {
                     let iso = d.iso_week();
                     format!("{}-W{:02}", iso.year(), iso.week())
                 } else {
-                    r.date.clone()
+                    date_str
                 }
             }),
             "month" => aggregate_by(&records, |r| {
@@ -167,7 +172,11 @@ impl HistoryStore {
         let total_input_tokens: u64 = records.iter().map(|r| r.input_tokens).sum();
         let total_output_tokens: u64 = records.iter().map(|r| r.output_tokens).sum();
         let total_latency_ms: u64 = records.iter().map(|r| r.total_latency_ms).sum();
-        let active_days = records.len() as u64;
+        let active_days = {
+            let mut days = std::collections::HashSet::new();
+            for r in &records { days.insert(r.date.chars().take(10).collect::<String>()); }
+            days.len() as u64
+        };
         let mut models = std::collections::HashSet::new();
         for r in &records { models.insert(&r.model); }
         let success_rate = if total_requests > 0 {

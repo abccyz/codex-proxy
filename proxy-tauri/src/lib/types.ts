@@ -122,11 +122,11 @@ export interface GlobalSummary {
   total_failed: number;
   success_rate: number;
   total_input_tokens: number;
-  total_output_tokens: number;
+  total_output_tokens: number
   total_tokens: number;
   avg_latency_ms: number;
   active_days: number;
   unique_models: number;
 }
 
-export type StatsDimension = 'day' | 'week' | 'month' | 'year';
+export type StatsDimension = 'hour' | 'day' | 'week' | 'month' | 'year';
