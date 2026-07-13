@@ -8,6 +8,8 @@ interface AppContextType {
   setLang: (l: Lang) => void;
   proxyRunning: boolean;
   setProxyRunning: (v: boolean) => void;
+  configVersion: number;
+  bumpConfigVersion: () => void;
 }
 
 const AppContext = createContext<AppContextType>(null!);
@@ -20,6 +22,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     () => (localStorage.getItem('proxy-lang') as Lang) ?? 'zh'
   );
   const [proxyRunning, setProxyRunning] = useState(false);
+  const [configVersion, setConfigVersion] = useState(0);
+  const bumpConfigVersion = () => setConfigVersion(v => v + 1);
 
   const setTheme = (t: 'dark' | 'light') => { setThemeState(t); localStorage.setItem('proxy-theme', t); };
   const setLang = (l: Lang) => { setLangState(l); localStorage.setItem('proxy-lang', l); };
@@ -29,7 +33,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [theme]);
 
   return (
-    <AppContext.Provider value={{ theme, setTheme, lang, setLang, proxyRunning, setProxyRunning }}>
+    <AppContext.Provider value={{ theme, setTheme, lang, setLang, proxyRunning, setProxyRunning, configVersion, bumpConfigVersion }}>
       {children}
     </AppContext.Provider>
   );

@@ -21,7 +21,7 @@ pub struct SavedConfig {
     pub updated_at: f64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SavedConfigFull {
     pub model: String,
     pub provider: String,
