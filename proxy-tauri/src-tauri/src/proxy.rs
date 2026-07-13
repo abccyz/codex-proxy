@@ -245,7 +245,8 @@ async fn handle_responses(
                 state.metrics.record_request(
                     upstream_model.clone(), false, "error".into(), latency, 0, 0,
                     format!("HTTP {}", status.as_u16()),
-                    String::new(), None, input_detail,
+                    String::new(), None,
+                    Some(input_detail),
                 );
                 return (
                     StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
@@ -267,7 +268,8 @@ async fn handle_responses(
             let latency = t0.elapsed().as_secs_f64();
             state.metrics.record_request(
                 upstream_model, false, "error".into(), latency, 0, 0,
-                e.to_string(), String::new(), None, input_detail,
+                e.to_string(), String::new(), None,
+                Some(input_detail),
             );
             (StatusCode::BAD_GATEWAY,
                 [(CONTENT_TYPE, "application/json")],
@@ -291,7 +293,7 @@ async fn handle_normal_response(
         Ok(v) => v,
         Err(_) => {
             let latency = t0.elapsed().as_secs_f64();
-            state.metrics.record_request(upstream_model, false, "error".into(), latency, 0, 0, "Invalid JSON".into(), String::new(), None, input_detail);
+            state.metrics.record_request(upstream_model, false, "error".into(), latency, 0, 0, "Invalid JSON".into(), String::new(), None, Some(input_detail));
             return (StatusCode::BAD_GATEWAY, [(CONTENT_TYPE, "application/json")],
                 serde_json::json!({"error": {"message": "Invalid upstream response", "type": "proxy_error"}}).to_string()
             ).into_response();
@@ -306,7 +308,7 @@ async fn handle_normal_response(
     let in_tok = usage.get("prompt_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
     let out_tok = usage.get("completion_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
 
-    state.metrics.record_request(upstream_model.clone(), true, "success".into(), latency, in_tok, out_tok, String::new(), content.clone(), None, input_detail);
+    state.metrics.record_request(upstream_model.clone(), false, "success".into(), latency, in_tok, out_tok, String::new(), content.clone(), None, Some(input_detail));
 
     // Also push to live session view
     state.metrics.stream_begin(upstream_model.clone());
@@ -430,22 +432,19 @@ async fn handle_streaming_response(
                     for tc in tc_delta {
                         let idx = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                         let acc = tool_calls.entry(idx).or_default();
-                        let name_was_empty = acc.name.is_empty();
+                        let _name_was_empty = acc.name.is_empty();
                         if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
                             if !id.is_empty() { acc.id = id.to_string(); }
                         }
                         if let Some(fn_obj) = tc.get("function") {
                             if let Some(name) = fn_obj.get("name").and_then(|v| v.as_str()) {
-                                acc.name.push_str(name);
+                                if !name.is_empty() { acc.name = name.to_string(); }
                             }
                             if let Some(args) = fn_obj.get("arguments").and_then(|v| v.as_str()) {
                                 acc.arguments_parts.push(args.to_string());
                             }
                         }
-                        // Record tool call to session when name is first detected
-                        if name_was_empty && !acc.name.is_empty() {
-                            metrics.stream_tool_call(&acc.name);
-                        }
+                        // Don't record tool call here - wait until arguments are complete
                     }
                 }
             }
@@ -478,11 +477,19 @@ async fn handle_streaming_response(
         }
 
         // Emit function_call events from accumulated tool calls
-        let function_calls: Vec<FunctionCall> = tool_calls.values().map(|acc| FunctionCall {
-            id: acc.id.clone(),
-            name: acc.name.clone(),
-            arguments: acc.arguments_parts.join(""),
-        }).collect();
+        let function_calls: Vec<FunctionCall> = tool_calls.values()
+            .filter(|tc| !tc.name.is_empty())
+            .map(|acc| FunctionCall {
+                id: if acc.id.is_empty() { format!("call_{}", &uuid::Uuid::new_v4().to_string()[..12]) } else { acc.id.clone() },
+                name: acc.name.clone(),
+                arguments: acc.arguments_parts.join(""),
+            })
+            .collect();
+
+        // Record tool calls to session with complete arguments
+        for fc in &function_calls {
+            metrics.stream_tool_call(&fc.name, &fc.arguments);
+        }
 
         for (i, fc) in function_calls.iter().enumerate() {
             let oi = next_output_index + i as u32;
@@ -536,8 +543,8 @@ async fn handle_streaming_response(
         metrics.stream_end();
         metrics.record_request(
             upstream_model_clone, true, "success".into(), latency,
-            in_tok, out_tok, String::new(), content_clone,
-            None, input_detail,
+            in_tok, out_tok, String::new(), full_text.clone(),
+            None, Some(input_detail),
         );
     };
 
@@ -558,7 +565,7 @@ async fn handle_nonstreaming_to_sse(
         Ok(v) => v,
         Err(_) => {
             let latency = t0.elapsed().as_secs_f64();
-            state.metrics.record_request(upstream_model, false, "error".into(), latency, 0, 0, "Invalid JSON".into(), String::new(), None, input_detail);
+            state.metrics.record_request(upstream_model, false, "error".into(), latency, 0, 0, "Invalid JSON".into(), String::new(), None, Some(input_detail));
             return (StatusCode::BAD_GATEWAY, [(CONTENT_TYPE, "application/json")],
                 serde_json::json!({"error": {"message": "Invalid upstream response", "type": "proxy_error"}}).to_string()
             ).into_response();
@@ -578,7 +585,17 @@ async fn handle_nonstreaming_to_sse(
     let item_id = make_item_id();
     let created = chrono::Utc::now().timestamp();
 
-    let (output_items, _has_text, _content_str, function_calls) = convert_chat_message_to_output(msg);
+    let raw_tool_calls = msg.get("tool_calls").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let function_calls: Vec<FunctionCall> = raw_tool_calls.iter()
+        .filter_map(|tc| {
+            let func = tc.get("function")?;
+            Some(FunctionCall {
+                id: tc.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                name: func.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                arguments: func.get("arguments").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            })
+        })
+        .collect();
 
     let metrics = state.metrics.clone();
     metrics.stream_begin(upstream_model.clone());
@@ -602,8 +619,13 @@ async fn handle_nonstreaming_to_sse(
                 "type": "response.in_progress", "response": {"id": &resp_id, "object": "response", "status": "in_progress"},
             })).unwrap()));
 
+        let mut output_items: Vec<Value> = Vec::new();
+        let mut next_output_index: u32 = 0;
+
         // Emit text content if present
-        if !content.is_empty() || ModelVendor::from_model_name(&upstream_model).requires_reasoning_content() {
+        let has_function_calls = !function_calls.is_empty();
+        let stream_vendor = ModelVendor::from_model_name(&upstream_model);
+        if !content.is_empty() || !reasoning_content.is_empty() || (has_function_calls && stream_vendor.requires_reasoning_content()) {
             // Feed content to live stream for dashboard preview
             if !content.is_empty() {
                 metrics.stream_chunk(&content);
@@ -632,6 +654,7 @@ async fn handle_nonstreaming_to_sse(
                 })).unwrap()));
 
             let ns_text_item = build_text_output_item(&item_id, &content, &reasoning_content, &upstream_model);
+            output_items.push(ns_text_item.clone());
 
             yield Ok::<_, Infallible>(axum::response::sse::Event::default()
                 .event("response.content_part.done")
@@ -646,13 +669,14 @@ async fn handle_nonstreaming_to_sse(
                 .data(serde_json::to_string(&serde_json::json!({
                     "type": "response.output_item.done", "output_index": 0, "item": &ns_text_item,
                 })).unwrap()));
+            next_output_index = 1;
         }
 
         // Emit function_call events
         for (i, fc) in function_calls.iter().enumerate() {
-            let oi = 1 + i as u32;
-            // Record tool call to session
-            metrics.stream_tool_call(&fc.name);
+            let oi = next_output_index + i as u32;
+            // Record tool call to session with arguments
+            metrics.stream_tool_call(&fc.name, &fc.arguments);
             yield Ok::<_, Infallible>(axum::response::sse::Event::default()
                 .event("response.output_item.added")
                 .data(serde_json::to_string(&serde_json::json!({
@@ -671,6 +695,15 @@ async fn handle_nonstreaming_to_sse(
                 .data(serde_json::to_string(&serde_json::json!({
                     "type": "response.output_item.done", "output_index": oi, "item": &fc_item,
                 })).unwrap()));
+
+            output_items.push(fc_item);
+        }
+
+        if output_items.is_empty() {
+            output_items.push(serde_json::json!({
+                "type": "message", "id": &item_id, "role": "assistant", "status": "completed",
+                "content": [{"type": "output_text", "text": &content, "annotations": []}],
+            }));
         }
 
         yield Ok::<_, Infallible>(axum::response::sse::Event::default()
@@ -691,7 +724,7 @@ async fn handle_nonstreaming_to_sse(
         state.metrics.record_request(
             upstream_model, true, "success".into(), latency,
             in_tok, out_tok, String::new(), content,
-            None, input_detail,
+            None, Some(input_detail),
         );
     };
 

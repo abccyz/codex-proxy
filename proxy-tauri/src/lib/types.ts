@@ -75,3 +75,32 @@ export interface InputDetail {
   tools: string;
   params: unknown;
 }
+
+export interface CatalogProvider {
+  id: string;
+  name: string;
+  api: string | null;
+  model_count: number;
+  npm: string | null;
+  models: CatalogModel[];
+}
+
+export interface CatalogModel {
+  id: string;
+  name: string;
+  description: string | null;
+  family: string | null;
+  tool_call: boolean;
+  reasoning: boolean;
+  attachment: boolean;
+  context: number | null;
+  output: number | null;
+  release_date: string | null;
+  open_weights: boolean | null;
+  cost_input: number | null;
+  cost_output: number | null;
+}
+
+export interface ModelCatalog {
+  providers: CatalogProvider[];
+}

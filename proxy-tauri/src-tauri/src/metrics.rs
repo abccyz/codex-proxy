@@ -129,14 +129,71 @@ impl Metrics {
         self.generation.fetch_add(1, Ordering::Release);
     }
 
-    pub fn stream_tool_call(&self, tool_name: &str) {
+    pub fn stream_tool_call(&self, tool_name: &str, arguments: &str) {
         if let Some(ref mut live) = *self.live_stream.lock() {
             if live.content.len() < MAX_LIVE_STREAM_CONTENT {
                 if !live.content.is_empty() && !live.content.ends_with('\n') {
                     live.content.push('\n');
                 }
                 let time_tag = current_time_tag();
-                live.content.push_str(&format!("\n**{} \u{1f527} Tool Call: `{}`**\n\n", time_tag, tool_name));
+                live.content.push_str(&format!("\n**{} \u{1f527} Tool Call: `{}`**\n", time_tag, tool_name));
+                if !arguments.is_empty() {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(arguments) {
+                        // Extract cmd or command field
+                        let cmd_text = json.get("cmd").and_then(|v| v.as_str())
+                            .or_else(|| json.get("command").and_then(|v| v.as_str()));
+
+                        // Build extra meta fields line (non-cmd fields)
+                        let extras: Vec<String> = json.as_object()
+                            .map(|obj| obj.iter()
+                                .filter(|(k, _)| *k != "cmd" && *k != "command")
+                                .filter_map(|(k, v)| {
+                                    let val = v.as_u64().map(|n| n.to_string())
+                                        .or_else(|| v.as_f64().map(|n| n.to_string()))
+                                        .or_else(|| v.as_str().map(|s| s.to_string()));
+                                    val.map(|s| {
+                                        if s.len() > 30 { format!("`{}`: `{}...`", k, &s[..30]) }
+                                        else { format!("`{}`: `{}`", k, s) }
+                                    })
+                                })
+                                .collect())
+                            .unwrap_or_default();
+
+                        // Show command in code block
+                        if let Some(cmd) = cmd_text {
+                            if cmd.len() > 300 {
+                                live.content.push_str(&format!("\n```\n{}...\n```\n", &cmd[..300]));
+                            } else {
+                                live.content.push_str(&format!("\n```\n{}\n```\n", cmd));
+                            }
+                        }
+
+                        // Show meta fields as a blockquote line
+                        if !extras.is_empty() {
+                            live.content.push_str(&format!("> ⏱️ {}\n\n", extras.join(", ")));
+                        }
+
+                        // If no cmd/command found, fallback to full JSON
+                        if cmd_text.is_none() && !extras.is_empty() {
+                            // already handled above via extras
+                        } else if cmd_text.is_none() {
+                            let s = arguments.to_string();
+                            if s.len() > 200 {
+                                live.content.push_str(&format!("\n```\n{}...\n```\n", &s[..200]));
+                            } else {
+                                live.content.push_str(&format!("\n```\n{}\n```\n", s));
+                            }
+                        }
+                    } else {
+                        // Not JSON, show as-is truncated
+                        if arguments.len() > 200 {
+                            live.content.push_str(&format!("\n```\n{}...\n```\n", &arguments[..200]));
+                        } else {
+                            live.content.push_str(&format!("\n```\n{}\n```\n", arguments));
+                        }
+                    }
+                }
+                live.content.push('\n');
             }
         }
         self.generation.fetch_add(1, Ordering::Release);
@@ -157,9 +214,9 @@ impl Metrics {
 
     pub fn generation(&self) -> u64 { self.generation.load(Ordering::Acquire) }
 
-    pub fn record_request(&self, model: String, success: bool, status: String, latency: f64, input_tokens: u64, output_tokens: u64, error: String, content: String, req_id: Option<String>, input_detail: InputDetail) {
+    pub fn record_request(&self, model: String, stream: bool, status: String, latency: f64, input_tokens: u64, output_tokens: u64, error: String, preview: String, req_id: Option<String>, input_detail: Option<InputDetail>) {
         self.total.fetch_add(1, Ordering::Release);
-        if success { self.success.fetch_add(1, Ordering::Release); } else { self.failed.fetch_add(1, Ordering::Release); }
+        if status == "success" { self.success.fetch_add(1, Ordering::Release); } else { self.failed.fetch_add(1, Ordering::Release); }
         self.total_input_tokens.fetch_add(input_tokens, Ordering::Release);
         self.total_output_tokens.fetch_add(output_tokens, Ordering::Release);
         self.total_latency_ms.fetch_add((latency * 1000.0) as u64, Ordering::Release);
@@ -167,14 +224,16 @@ impl Metrics {
         let time_str = now.format("%H:%M:%S").to_string();
         let timestamp = now.timestamp() as f64;
         let minute = now.timestamp() / 60;
-        let summary = if input_detail.instructions.is_empty() {
-            input_detail.messages.iter().map(|m| m.content.clone()).collect::<Vec<_>>().join(" | ")
-        } else { input_detail.instructions.clone() };
+        let empty_detail = crate::metrics::InputDetail { instructions: String::new(), messages: vec![], tools: String::new(), params: serde_json::json!({}) };
+        let detail = input_detail.as_ref().unwrap_or(&empty_detail);
+        let summary = if detail.instructions.is_empty() {
+            detail.messages.iter().map(|m| m.content.clone()).collect::<Vec<_>>().join(" | ")
+        } else { detail.instructions.clone() };
         let input_preview = truncate_str(&summary, 80);
-        let preview = truncate_str(&content, 120);
+        let content = preview.clone();
         let rec = HistoryRecord {
-            req_id, time: time_str, timestamp, model: model.clone(), stream: true, status, latency,
-            input_tokens, output_tokens, error, input_summary: summary, input_preview, input_detail, preview, content,
+            req_id, time: time_str, timestamp, model: model.clone(), stream, status, latency,
+            input_tokens, output_tokens, error, input_summary: summary, input_preview, input_detail: detail.clone(), preview, content,
         };
         let mut hist = self.history.write();
         hist.records.push_back(rec);

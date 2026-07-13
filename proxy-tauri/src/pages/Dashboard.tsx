@@ -3,7 +3,6 @@ import { invoke } from '@tauri-apps/api/core';
 import { Activity, CheckCircle, XCircle, Clock, Zap, Coins, Wifi, WifiOff, Globe, ArrowRight, Radio } from 'lucide-react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { useApp } from '@/contexts/AppContext';
 import { useMetrics } from '@/contexts/MetricsContext';
 import { t } from '@/lib/i18n';
@@ -85,6 +84,7 @@ export default function Dashboard() {
     return snapshot.latency_history.slice(-50).map((p, i) => ({
       i,
       v: +(p.v * 1000).toFixed(0),
+      label: new Date(p.t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     }));
   }, [snapshot]);
 
@@ -133,7 +133,7 @@ export default function Dashboard() {
             <Globe className="w-3.5 h-3.5 text-blue" />
             {t(lang, 'config_status')}
           </h2>
-          {currentConfig && (
+          {currentConfig?.model && (
             <div className="space-y-1 text-xs">
               <div className="flex gap-2">
                 <span className="text-text-3 w-20">{t(lang, 'config_model')}:</span>
@@ -198,6 +198,7 @@ export default function Dashboard() {
           ) : (
             <div className="text-xs text-text-3 py-6 text-center italic">Waiting for session...</div>
           )}
+
         </div>
       </div>
 
@@ -218,9 +219,9 @@ export default function Dashboard() {
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-              <XAxis dataKey="i" hide />
+              <XAxis dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-3)' }} interval="preserveStartEnd" />
               <YAxis tick={{ fontSize: 10, fill: 'var(--text-3)' }} width={30} />
-              <Tooltip contentStyle={{ background: 'var(--bg-elev)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11 }} />
+              <Tooltip contentStyle={{ background: 'var(--bg-elev)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11 }} labelFormatter={(l) => l} formatter={(v) => [`${v} req/min`, t(lang, 'chart_throughput')]} />
               <Area type="monotone" dataKey="v" stroke="var(--blue)" fill="url(#gradThroughput)" strokeWidth={1.5} dot={false} />
             </AreaChart>
           </ResponsiveContainer>
@@ -233,9 +234,9 @@ export default function Dashboard() {
           <ResponsiveContainer width="100%" height={110}>
             <LineChart data={latencyData}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-              <XAxis dataKey="i" hide />
+              <XAxis dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-3)' }} interval="preserveStartEnd" />
               <YAxis tick={{ fontSize: 10, fill: 'var(--text-3)' }} width={40} />
-              <Tooltip contentStyle={{ background: 'var(--bg-elev)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11 }} />
+              <Tooltip contentStyle={{ background: 'var(--bg-elev)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11 }} labelFormatter={(l) => l} formatter={(v) => [`${v} ms`, t(lang, 'chart_latency')]} />
               <Line type="monotone" dataKey="v" stroke="var(--yellow)" strokeWidth={1.5} dot={false} />
             </LineChart>
           </ResponsiveContainer>
@@ -359,42 +360,29 @@ function LiveStreamMarkdown({ content }: { content: string }) {
 
   return (
     <div ref={scrollRef} className="max-h-48 overflow-auto text-xs text-text-2 leading-relaxed">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          p: ({ children }) => <p className="mb-1.5 last:mb-0">{children}</p>,
-          h1: ({ children }) => <h1 className="text-sm font-bold text-text-1 mb-1.5">{children}</h1>,
-          h2: ({ children }) => <h2 className="text-xs font-bold text-text-1 mb-1">{children}</h2>,
-          h3: ({ children }) => <h3 className="text-xs font-semibold text-text-1 mb-1">{children}</h3>,
-          ul: ({ children }) => <ul className="list-disc pl-4 mb-1.5">{children}</ul>,
-          ol: ({ children }) => <ol className="list-decimal pl-4 mb-1.5">{children}</ol>,
-          li: ({ children }) => <li className="mb-0.5">{children}</li>,
-          code: ({ className, children, ...props }) => {
-            const isInline = !className;
-            return isInline
-              ? <code className="bg-bg-elev px-1 py-0.5 rounded text-[11px] font-mono text-text-1" {...props}>{children}</code>
-              : <code className="text-[11px] font-mono text-text-1" {...props}>{children}</code>;
-          },
-          pre: ({ children }) => (
-            <pre className="bg-bg-elev p-2 rounded text-[11px] font-mono text-text-1 overflow-x-auto mb-1.5 whitespace-pre-wrap">
-              {children}
-            </pre>
-          ),
-          blockquote: ({ children }) => (
-            <blockquote className="border-l-2 border-accent pl-2 text-text-3 italic mb-1.5">{children}</blockquote>
-          ),
-          a: ({ href, children }) => (
-            <a href={href} className="text-accent underline" target="_blank" rel="noopener noreferrer">{children}</a>
-          ),
-          table: ({ children }) => (
-            <div className="overflow-x-auto mb-1.5"><table className="border-collapse text-[11px]">{children}</table></div>
-          ),
-          th: ({ children }) => <th className="border border-border px-2 py-0.5 bg-bg-elev font-semibold text-text-1">{children}</th>,
-          td: ({ children }) => <td className="border border-border px-2 py-0.5">{children}</td>,
-        }}
-      >
-        {displayed || 'Waiting for content...'}
-      </ReactMarkdown>
+      <div className="markdown-body">
+        <ReactMarkdown
+          components={{
+            pre: ({ children }) => (
+              <pre className="whitespace-pre-wrap break-all">{children}</pre>
+            ),
+            blockquote: ({ children }) => (
+              <blockquote className="border-l-2 border-accent/60 pl-2 text-text-3 text-[11px] my-1">{children}</blockquote>
+            ),
+            hr: () => (
+              <hr className="border-0 my-2"
+                style={{
+                  background: 'repeating-linear-gradient(90deg, var(--border) 0, var(--border) 6px, transparent 6px, transparent 10px)',
+                  height: '1px',
+                  maskImage: 'linear-gradient(to right, transparent 0%, black 30%, black 70%, transparent 100%)',
+                  WebkitMaskImage: 'linear-gradient(to right, transparent 0%, black 30%, black 70%, transparent 100%)',
+                }} />
+            ),
+          }}
+        >
+          {displayed || 'Waiting for content...'}
+        </ReactMarkdown>
+      </div>
     </div>
   );
 }

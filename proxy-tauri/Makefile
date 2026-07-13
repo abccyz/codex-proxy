@@ -73,7 +73,7 @@ run:
 	@sleep 3
 	cd $(CARGO_DIR) && cargo run &
 	@sleep 2
-	@echo "$(APP_NAME) starting (frontend: 1420, proxy: $(PORT))..."
+	@echo "$(APP_NAME) starting (frontend: 1421, proxy: $(PORT))..."
 
 run-release:
 	@npm run build
@@ -93,9 +93,9 @@ stop:
 		echo "Killing process on port $(PORT) (PID: $$PID)..."; \
 		kill -9 $$PID; \
 	fi
-	@VITE_PID=$$(lsof -ti :1420 2>/dev/null); \
+	@VITE_PID=$$(lsof -ti :1421 2>/dev/null); \
 	if [ -n "$$VITE_PID" ]; then \
-		echo "Killing Vite dev server on port 1420 (PID: $$VITE_PID)..."; \
+		echo "Killing Vite dev server on port 1421 (PID: $$VITE_PID)..."; \
 		kill -9 $$VITE_PID; \
 	fi
 	@sleep 1
@@ -109,9 +109,9 @@ stop:
 		echo "Killing process on port $(PORT) (PID: $$PID)..."; \
 		kill -9 $$PID; \
 	fi
-	@VITE_PID=$$(fuser 1420/tcp 2>/dev/null); \
+	@VITE_PID=$$(fuser 1421/tcp 2>/dev/null); \
 	if [ -n "$$VITE_PID" ]; then \
-		echo "Killing Vite dev server on port 1420 (PID: $$VITE_PID)..."; \
+		echo "Killing Vite dev server on port 1421 (PID: $$VITE_PID)..."; \
 		kill -9 $$VITE_PID; \
 	fi
 	@sleep 1
