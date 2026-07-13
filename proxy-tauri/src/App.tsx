@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { LayoutDashboard, History, Settings, Sun, Moon, Languages, Activity, Wifi, WifiOff, ChevronDown, Check } from 'lucide-react';
+import { LayoutDashboard, History, Settings, Sun, Moon, Languages, Activity, Wifi, WifiOff, ChevronDown, Check, Info } from 'lucide-react';
 import { useApp } from '@/contexts/AppContext';
 import { useMetrics } from '@/contexts/MetricsContext';
 import { t } from '@/lib/i18n';
@@ -8,14 +8,16 @@ import { cn } from '@/lib/utils';
 import Dashboard from '@/pages/Dashboard';
 import HistoryPage from '@/pages/History';
 import Config from '@/pages/Config';
+import About from '@/pages/About';
 import type { SavedConfig } from '@/lib/types';
 
-type Tab = 'dashboard' | 'history' | 'config';
+type Tab = 'dashboard' | 'history' | 'config' | 'about';
 
 const tabs: { id: Tab; icon: typeof LayoutDashboard; labelKey: string }[] = [
   { id: 'dashboard', icon: LayoutDashboard, labelKey: 'tab_dashboard' },
   { id: 'history', icon: History, labelKey: 'tab_history' },
   { id: 'config', icon: Settings, labelKey: 'tab_config' },
+  { id: 'about', icon: Info, labelKey: 'tab_about' },
 ];
 
 const PRESET_NAMES: Record<string, string> = {
@@ -200,6 +202,7 @@ export default function App() {
         {activeTab === 'dashboard' && <Dashboard />}
         {activeTab === 'history' && <HistoryPage />}
         {activeTab === 'config' && <Config />}
+        {activeTab === 'about' && <About />}
       </main>
     </div>
   );

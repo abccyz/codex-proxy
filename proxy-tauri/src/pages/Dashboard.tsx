@@ -1,39 +1,17 @@
 import { useMemo, useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Activity, CheckCircle, XCircle, Clock, Zap, Coins, Wifi, WifiOff, Globe, ArrowRight, Radio } from 'lucide-react';
+import { Activity, CheckCircle, XCircle, Clock, Zap, Coins, Wifi, WifiOff, Globe, ArrowRight, Radio, LogOut, Play } from 'lucide-react';
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 import ReactMarkdown from 'react-markdown';
 import { useApp } from '@/contexts/AppContext';
 import { useMetrics } from '@/contexts/MetricsContext';
 import { t } from '@/lib/i18n';
 import { cn, formatNumber, formatLatency, formatUptime } from '@/lib/utils';
+import StatCard from '@/components/StatCard';
 import type { CurrentConfig, TaskItem } from '@/lib/types';
 
-function StatCard({ icon: Icon, label, value, sub, colorClass, accentClass }: {
-  icon: typeof Activity;
-  label: string;
-  value: string;
-  sub?: string;
-  colorClass: string;
-  accentClass: string;
-}) {
-  return (
-    <div className={cn(
-      "bg-bg-card border border-border rounded-lg p-2.5 hover:border-accent/50 transition-all duration-200 hover:-translate-y-0.5",
-      colorClass
-    )}>
-      <div className="flex items-center gap-1 mb-0.5">
-        <Icon className="w-2.5 h-2.5 text-text-3" />
-        <span className="text-[9px] text-text-3 uppercase tracking-wider font-semibold">{label}</span>
-      </div>
-      <div className={cn("text-xl font-bold font-mono leading-tight", accentClass)}>{value}</div>
-      {sub && <div className="text-[10px] text-text-2 mt-0.5 font-mono">{sub}</div>}
-    </div>
-  );
-}
-
 export default function Dashboard() {
-  const { lang, proxyRunning } = useApp();
+  const { lang, proxyRunning, setProxyRunning } = useApp();
   const { snapshot } = useMetrics();
 
   const [currentConfig, setCurrentConfig] = useState<CurrentConfig | null>(null);
@@ -54,6 +32,34 @@ export default function Dashboard() {
     };
     fetchConfig();
   }, []);
+
+  const doBypassProxy = async () => {
+    try {
+      await invoke('bypass_proxy');
+      setProxyRunning(false);
+      const [cc, ui] = await Promise.all([
+        invoke<CurrentConfig>('get_current_config'),
+        invoke<{ url: string; model: string }>('get_upstream_info'),
+      ]);
+      setCurrentConfig(cc);
+      setUpstreamUrl(ui.url);
+      setUpstreamModel(ui.model);
+    } catch {}
+  };
+
+  const doStartProxy = async () => {
+    try {
+      await invoke('start_proxy');
+      setProxyRunning(true);
+      const [cc, ui] = await Promise.all([
+        invoke<CurrentConfig>('get_current_config'),
+        invoke<{ url: string; model: string }>('get_upstream_info'),
+      ]);
+      setCurrentConfig(cc);
+      setUpstreamUrl(ui.url);
+      setUpstreamModel(ui.model);
+    } catch {}
+  };
 
   const stats = useMemo(() => {
     if (!snapshot) return null;
@@ -129,10 +135,31 @@ export default function Dashboard() {
       <div className="grid grid-cols-2 gap-2">
         {/* Proxy Status - half width */}
         <div className="bg-bg-card border border-border rounded-lg p-3">
-          <h2 className="text-xs font-semibold text-text-1 mb-2 flex items-center gap-2">
-            <Globe className="w-3.5 h-3.5 text-blue" />
-            {t(lang, 'config_status')}
-          </h2>
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-xs font-semibold text-text-1 flex items-center gap-2">
+              <Globe className="w-3.5 h-3.5 text-blue" />
+              {t(lang, 'config_status')}
+            </h2>
+            {proxyRunning ? (
+              <button
+                onClick={doBypassProxy}
+                className="px-2 py-1 rounded-lg border text-[11px] font-medium inline-flex items-center gap-1 transition-all bg-bg-elev border-border hover:border-text-3 text-text-2 hover:text-text-1"
+                title={t(lang, 'config_bypass_desc')}
+              >
+                <LogOut className="w-3 h-3" />
+                {t(lang, 'config_bypass')}
+              </button>
+            ) : (
+              <button
+                onClick={doStartProxy}
+                className="px-2 py-1 rounded-lg text-[11px] font-medium inline-flex items-center gap-1 transition-all bg-accent/10 text-accent hover:bg-accent hover:text-white"
+                title={t(lang, 'config_start_proxy')}
+              >
+                <Play className="w-3 h-3" />
+                {t(lang, 'config_start_proxy')}
+              </button>
+            )}
+          </div>
           {currentConfig?.model && (
             <div className="space-y-1 text-xs">
               <div className="flex gap-2">
@@ -145,7 +172,14 @@ export default function Dashboard() {
               </div>
               <div className="flex gap-2">
                 <span className="text-text-3 w-20">{t(lang, 'config_base_url')}:</span>
-                <span className="text-text-1 font-mono">http://127.0.0.1:8000/v1 <span className="text-text-3">({t(lang, 'config_via')})</span></span>
+                <span className="text-text-1 font-mono flex items-center gap-1">
+                  {currentConfig.base_url}
+                  {currentConfig.base_url.includes('127.0.0.1') ? (
+                    <span className="text-text-3">({t(lang, 'config_via')})</span>
+                  ) : (
+                    <span className="text-green">({t(lang, 'config_bypassed')})</span>
+                  )}
+                </span>
               </div>
               <div className="border-t border-border pt-1.5 mt-1">
                 <div className="flex items-center gap-1.5 text-text-3 text-[10px] mb-1 font-semibold">

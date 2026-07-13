@@ -2,6 +2,7 @@ mod config;
 mod connectivity;
 mod convert;
 mod error;
+mod history_store;
 mod metrics;
 mod model;
 mod model_catalog;
@@ -10,15 +11,40 @@ mod sse;
 
 use config::{ConfigManager, SecureConfigStore, SavedConfig};
 use connectivity::ConnectivityResult;
+use history_store::HistoryStore;
 use metrics::{Metrics, SharedMetrics};
 use model_catalog::ModelCatalog;
 use proxy::AppState;
+use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Emitter, Manager};
 use std::sync::{Arc, RwLock};
 use std::path::PathBuf;
 
 static PROXY_PORT: u16 = 8000;
+
+#[derive(Serialize, Deserialize, Default)]
+struct PersistedState {
+    proxy_running: bool,
+}
+
+fn load_persisted_state(path: &PathBuf) -> PersistedState {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_persisted_state(path: &PathBuf, state: &PersistedState) {
+    if let Ok(json) = serde_json::to_string(state) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+/// Strip provider prefix from model name: "deepseek/deepseek-v4-flash" -> "deepseek-v4-flash"
+fn strip_model_prefix(model: &str) -> String {
+    model.split('/').last().unwrap_or(model).to_string()
+}
 
 // ── State wrapper for Tauri managed state ──
 pub struct TauriAppState {
@@ -28,6 +54,9 @@ pub struct TauriAppState {
     pub secure_store: Arc<SecureConfigStore>,
     pub proxy_running: Arc<AtomicBool>,
     pub proxy_handle: RwLock<Option<tokio::task::JoinHandle<()>>>,
+    pub metrics_handle: RwLock<Option<tokio::task::JoinHandle<()>>>,
+    pub state_file_path: PathBuf,
+    pub history_store: Arc<HistoryStore>,
 }
 
 // ── Tauri Commands ──
@@ -83,9 +112,11 @@ fn apply_config(state: tauri::State<TauriAppState>, name: String) -> Result<(), 
         .ok_or_else(|| "Config not found".to_string())?;
     let upstream = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
     let proxy_base_url = format!("http://127.0.0.1:{}/v1", PROXY_PORT);
+    // Backup original config before proxy modifies it
+    state.config_manager.backup_config();
     state.config_manager.apply_model(&cfg.model, &cfg.provider, &proxy_base_url, &cfg.api_key);
     state.proxy_state.set_upstream(upstream, cfg.api_key);
-    let model_clone = cfg.model.clone();
+    let model_clone = strip_model_prefix(&cfg.model);
     state.proxy_state.set_upstream_model(model_clone);
     tracing::info!("Applied config: {} -> {} (model: {})", name, cfg.base_url, cfg.model);
     Ok(())
@@ -117,6 +148,88 @@ async fn test_connectivity(
 #[tauri::command]
 fn get_proxy_status(state: tauri::State<TauriAppState>) -> bool {
     state.proxy_running.load(Ordering::SeqCst)
+}
+
+#[tauri::command]
+fn bypass_proxy(state: tauri::State<TauriAppState>) -> Result<(), String> {
+    // Stop the proxy server
+    if let Some(handle) = state.proxy_handle.write().unwrap().take() {
+        handle.abort();
+    }
+    // Stop the metrics emission loop
+    if let Some(handle) = state.metrics_handle.write().unwrap().take() {
+        handle.abort();
+    }
+    state.proxy_state.set_upstream(String::new(), String::new());
+    state.proxy_state.set_upstream_model(String::new());
+    state.proxy_running.store(false, Ordering::SeqCst);
+
+    // Persist state
+    save_persisted_state(&state.state_file_path, &PersistedState { proxy_running: false });
+
+    // Restore original config file from backup
+    state.config_manager.restore_config();
+
+    tracing::info!("Proxy stopped and config restored");
+    Ok(())
+}
+
+#[tauri::command]
+async fn start_proxy(app_handle: tauri::AppHandle, state: tauri::State<'_, TauriAppState>) -> Result<(), String> {
+    if state.proxy_running.load(Ordering::SeqCst) {
+        return Err("Proxy is already running".to_string());
+    }
+
+    let saved_configs = state.secure_store.list_configs();
+    if saved_configs.is_empty() {
+        return Err("No saved configs found".to_string());
+    }
+
+    // Find the matching config
+    let current = state.config_manager.get_current_model();
+    let matching = saved_configs.iter()
+        .find(|c| c.model == current.model)
+        .or_else(|| saved_configs.first());
+    let cfg_name = matching.map(|c| c.name.clone()).ok_or_else(|| "No config found".to_string())?;
+    let cfg = state.secure_store.get_config_full(&cfg_name)
+        .ok_or_else(|| "Config data not found".to_string())?;
+
+    let upstream = format!("{}/chat/completions", cfg.base_url.trim_end_matches('/'));
+    let proxy_base_url = format!("http://127.0.0.1:{}/v1", PROXY_PORT);
+
+    // Set up upstream state
+    state.proxy_state.set_upstream(upstream, cfg.api_key.clone());
+    state.proxy_state.set_upstream_model(strip_model_prefix(&cfg.model));
+
+    // Backup original config before proxy modifies it
+    state.config_manager.backup_config();
+    // Update config file to point to proxy
+    state.config_manager.apply_model(&cfg.model, &cfg.provider, &proxy_base_url, &cfg.api_key);
+
+    // Start the proxy server
+    let px = state.proxy_state.clone();
+    let metrics = state.metrics.clone();
+    let h = proxy::run_server(px.clone(), PROXY_PORT).await
+        .ok_or_else(|| "Failed to start proxy server".to_string())?;
+
+    // Store the handle
+    *state.proxy_handle.write().unwrap() = Some(h);
+
+    // Start metrics emission loop
+    let mh = tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            let snap = metrics.snapshot();
+            let _ = app_handle.emit("metrics", snap);
+        }
+    });
+    *state.metrics_handle.write().unwrap() = Some(mh);
+
+    // Persist state
+    save_persisted_state(&state.state_file_path, &PersistedState { proxy_running: true });
+
+    tracing::info!("Proxy started: {} -> {} (model: {})", cfg_name, cfg.base_url, cfg.model);
+    Ok(())
 }
 
 #[tauri::command]
@@ -153,6 +266,11 @@ async fn refresh_model_catalog() -> Result<ModelCatalog, String> {
     model_catalog::refresh_catalog().await
 }
 
+#[tauri::command]
+fn get_history_stats(state: tauri::State<TauriAppState>, dimension: String) -> Vec<history_store::AggregatedStat> {
+    state.history_store.get_stats(&dimension)
+}
+
 // ── App Entry ──
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -174,8 +292,13 @@ pub fn run() {
 
             let db_path = data_dir.join("proxy_config.db");
             let key_file = data_dir.join(".proxy_key");
+            let state_file_path = data_dir.join("proxy_state.json");
 
-            let metrics = Arc::new(Metrics::new());
+            // Load persisted proxy state
+            let persisted = load_persisted_state(&state_file_path);
+            let should_start_proxy = persisted.proxy_running;
+
+            let metrics = Arc::new(Metrics::new(Arc::new(HistoryStore::new(&data_dir))));
             let config_manager = Arc::new(ConfigManager::new(config_path));
             let secure_store = Arc::new(SecureConfigStore::new(db_path, key_file));
             let proxy_running = Arc::new(AtomicBool::new(false));
@@ -213,22 +336,25 @@ pub fn run() {
                 // No saved configs: clear proxy state and config file
                 proxy_state.set_upstream(String::new(), String::new());
                 proxy_state.set_upstream_model(String::new());
+                config_manager.backup_config();
                 config_manager.apply_model("", "", "", "");
             } else {
                 let matching_cfg = saved_configs.iter().find(|s| s.model == current.model);
                 if let Some(cfg) = matching_cfg {
                     if let Some(full) = secure_store.get_config_full(&cfg.name) {
                         let upstream = format!("{}/chat/completions", full.base_url.trim_end_matches('/'));
+                        config_manager.backup_config();
                         config_manager.apply_model(&cfg.model, &cfg.provider, &proxy_base_url, &full.api_key);
                         proxy_state.set_upstream(upstream, full.api_key);
-                        proxy_state.set_upstream_model(cfg.model.clone());
+                        proxy_state.set_upstream_model(strip_model_prefix(&cfg.model));
                     }
                 } else if let Some(first_cfg) = saved_configs.first() {
                     if let Some(full) = secure_store.get_config_full(&first_cfg.name) {
                         let upstream = format!("{}/chat/completions", full.base_url.trim_end_matches('/'));
+                        config_manager.backup_config();
                         config_manager.apply_model(&first_cfg.model, &first_cfg.provider, &proxy_base_url, &full.api_key);
                         proxy_state.set_upstream(upstream, full.api_key);
-                        proxy_state.set_upstream_model(first_cfg.model.clone());
+                        proxy_state.set_upstream_model(strip_model_prefix(&first_cfg.model));
                     }
                 }
             }
@@ -238,33 +364,47 @@ pub fn run() {
                 metrics: metrics.clone(),
                 config_manager,
                 secure_store,
-                proxy_running,
+                proxy_running: proxy_running.clone(),
                 proxy_handle: RwLock::new(None),
+                metrics_handle: RwLock::new(None),
+                state_file_path,
+                history_store: metrics.history_store.clone(),
             };
+
+            app.manage(tauri_state);
+
+            // Start proxy server only if it was running before
+            if should_start_proxy && !saved_configs.is_empty() {
+                let px = proxy_state.clone();
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Some(h) = proxy::run_server(px.clone(), PROXY_PORT).await {
+                        // Store the handle so we can abort it later
+                        if let Some(state) = app_handle.try_state::<TauriAppState>() {
+                            *state.proxy_handle.write().unwrap() = Some(h);
+                        }
+                        // Emit metrics periodically
+                        let metrics = px.metrics.clone();
+                        let app_handle2 = app_handle.clone();
+                        let mh = tokio::spawn(async move {
+                            loop {
+                                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                                let snap = metrics.snapshot();
+                                let _ = app_handle2.emit("metrics", snap);
+                            }
+                        });
+                        if let Some(state) = app_handle.try_state::<TauriAppState>() {
+                            *state.metrics_handle.write().unwrap() = Some(mh);
+                        }
+                    }
+                });
+            }
 
             // Start background catalog refresh
             tauri::async_runtime::spawn(async {
                 let _ = model_catalog::refresh_catalog().await;
             });
 
-            // Start proxy server
-            let px = proxy_state.clone();
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                if let Some(h) = proxy::run_server(px.clone(), PROXY_PORT).await {
-                    // Emit metrics periodically
-                    let metrics = px.metrics.clone();
-                    tokio::spawn(async move {
-                        loop {
-                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                            let snap = metrics.snapshot();
-                            let _ = handle.emit("metrics", snap);
-                        }
-                    });
-                }
-            });
-
-            app.manage(tauri_state);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -279,6 +419,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_metrics,
             get_history_detail,
+            get_history_stats,
             get_current_config,
             get_saved_configs,
             get_config_full,
@@ -292,6 +433,8 @@ pub fn run() {
             clear_session,
             get_model_catalog,
             refresh_model_catalog,
+            bypass_proxy,
+            start_proxy,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

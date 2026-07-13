@@ -5,6 +5,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+use crate::history_store::HistoryStore;
 
 struct LiveStream { model: String, content: String, start_time: Instant, end_time: Option<Instant> }
 
@@ -84,6 +85,7 @@ pub struct Metrics {
     history: RwLock<MetricsHistory>,
     live_stream: Mutex<Option<LiveStream>>,
     cached_snapshot: Mutex<Option<(u64, Snapshot)>>,
+    pub history_store: Arc<HistoryStore>,
 }
 
 struct MetricsHistory {
@@ -94,7 +96,7 @@ struct MetricsHistory {
 }
 
 impl Metrics {
-    pub fn new() -> Self {
+    pub fn new(history_store: Arc<HistoryStore>) -> Self {
         Self {
             total: AtomicU64::new(0), success: AtomicU64::new(0), failed: AtomicU64::new(0),
             total_input_tokens: AtomicU64::new(0), total_output_tokens: AtomicU64::new(0),
@@ -102,6 +104,7 @@ impl Metrics {
             start_time: Instant::now(), generation: AtomicU64::new(0),
             history: RwLock::new(MetricsHistory { records: VecDeque::new(), throughput: Vec::new(), latency_history: Vec::new(), model_stats: HashMap::new() }),
             live_stream: Mutex::new(None), cached_snapshot: Mutex::new(None),
+            history_store,
         }
     }
 
@@ -232,7 +235,7 @@ impl Metrics {
         let input_preview = truncate_str(&summary, 80);
         let content = preview.clone();
         let rec = HistoryRecord {
-            req_id, time: time_str, timestamp, model: model.clone(), stream, status, latency,
+            req_id, time: time_str, timestamp, model: model.clone(), stream, status: status.clone(), latency,
             input_tokens, output_tokens, error, input_summary: summary, input_preview, input_detail: detail.clone(), preview, content,
         };
         let mut hist = self.history.write();
@@ -248,8 +251,12 @@ impl Metrics {
         if hist.throughput.len() > 60 { hist.throughput.remove(0); }
         hist.latency_history.push(LatencyPoint { t: timestamp, v: latency });
         if hist.latency_history.len() > 200 { hist.latency_history.remove(0); }
-        *hist.model_stats.entry(model).or_insert(0) += 1;
+        *hist.model_stats.entry(model.clone()).or_insert(0) += 1;
+        drop(hist);
         self.generation.fetch_add(1, Ordering::Release);
+
+        // Persist to history store for long-term analytics
+        self.history_store.record_request(&model, &status, latency, input_tokens, output_tokens);
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -314,8 +321,6 @@ impl Metrics {
     }
 }
 
-impl Default for Metrics {
-    fn default() -> Self { Self::new() }
-}
+
 
 pub type SharedMetrics = Arc<Metrics>;

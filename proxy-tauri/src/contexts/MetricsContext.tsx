@@ -26,7 +26,6 @@ export function MetricsProvider({ children }: { children: ReactNode }) {
       import('@tauri-apps/api/event').then(({ listen }) => {
         listen<Snapshot>('metrics', (event) => {
           setSnapshot(event.payload);
-          setProxyRunning(true);
         }).then(fn => { unlisten = fn; });
       });
 

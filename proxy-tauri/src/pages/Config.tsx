@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Check, X, Server, ArrowRight, Globe, Key, Cpu, RefreshCw, Zap, Plus, ChevronLeft, LogOut, Search, Wrench, Brain, Paperclip, DollarSign, Calendar, Box, Play, Trash2, Power } from 'lucide-react';
+import { Check, X, Server, ArrowRight, Globe, Key, Cpu, RefreshCw, Zap, Plus, ChevronLeft, LogOut, Search, Wrench, Brain, Paperclip, DollarSign, Calendar, Box, Play, Trash2, Power, Square } from 'lucide-react';
 import { useApp } from '@/contexts/AppContext';
 import { t } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
@@ -33,7 +33,7 @@ const formatCost = (n: number | null): string => {
 };
 
 export default function Config() {
-  const { lang, configVersion } = useApp();
+  const { lang, configVersion, proxyRunning, setProxyRunning } = useApp();
 
   // Data
   const [currentConfig, setCurrentConfig] = useState<CurrentConfig | null>(null);
@@ -220,6 +220,28 @@ export default function Config() {
     await refresh();
   };
 
+  const doBypassProxy = async () => {
+    try {
+      await invoke('bypass_proxy');
+      setProxyRunning(false);
+      showToast(t(lang, 'toast_bypassed'));
+      await refresh();
+    } catch (e: any) {
+      showToast(String(e));
+    }
+  };
+
+  const doStartProxy = async () => {
+    try {
+      await invoke('start_proxy');
+      setProxyRunning(true);
+      await refresh();
+      showToast(t(lang, 'toast_applied'));
+    } catch (e: any) {
+      showToast(String(e));
+    }
+  };
+
   const toggleAddModel = (modelId: string) => {
     setAddModels(prev => 
       prev.includes(modelId) 
@@ -270,10 +292,31 @@ export default function Config() {
     <div className="h-full overflow-auto p-4 space-y-4 relative">
       {/* ===== 代理状态 ===== */}
       <div className="bg-bg-card border border-border rounded-lg p-4">
-        <h2 className="text-xs font-semibold text-text-1 mb-3 flex items-center gap-2">
-          <Globe className="w-3.5 h-3.5 text-blue" />
-          {t(lang, 'config_status')}
-        </h2>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-xs font-semibold text-text-1 flex items-center gap-2">
+            <Globe className="w-3.5 h-3.5 text-blue" />
+            {t(lang, 'config_status')}
+          </h2>
+          {currentConfig?.model && (proxyRunning ? (
+            <button
+              onClick={doBypassProxy}
+              className="px-2.5 py-1 rounded-lg border text-xs font-semibold inline-flex items-center gap-1.5 transition-all bg-bg-elev border-border hover:border-text-3 text-text-2 hover:text-text-1"
+              title={t(lang, 'config_bypass_desc')}
+            >
+              <LogOut className="w-3 h-3" />
+              {t(lang, 'config_bypass')}
+            </button>
+          ) : (
+            <button
+              onClick={doStartProxy}
+              className="px-2.5 py-1 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-all bg-accent/10 text-accent hover:bg-accent hover:text-white"
+              title={t(lang, 'config_start_proxy')}
+            >
+              <Play className="w-3 h-3" />
+              {t(lang, 'config_start_proxy')}
+            </button>
+          ))}
+        </div>
         {currentConfig?.model && (
           <div className="space-y-1.5 text-xs">
             <div className="flex gap-2">
@@ -286,8 +329,13 @@ export default function Config() {
             </div>
             <div className="flex gap-2">
               <span className="text-text-3 w-24">{t(lang, 'config_base_url')}:</span>
-              <span className="text-text-1 font-mono">
-                http://127.0.0.1:8000/v1 <span className="text-text-3">({t(lang, 'config_via')})</span>
+              <span className="text-text-1 font-mono flex items-center gap-1">
+                {currentConfig.base_url}
+                {currentConfig.base_url.includes('127.0.0.1') ? (
+                  <span className="text-text-3">({t(lang, 'config_via')})</span>
+                ) : (
+                  <span className="text-green">({t(lang, 'config_bypassed')})</span>
+                )}
               </span>
             </div>
             <div className="border-t border-border pt-2 mt-2">
@@ -317,7 +365,7 @@ export default function Config() {
           <div className="flex items-center gap-2">
             <button
               onClick={() => openModal('main')}
-              className="px-3 py-1.5 rounded-lg bg-accent/10 border border-accent/30 text-accent hover:bg-accent hover:text-white transition-all text-xs font-semibold inline-flex items-center gap-1.5"
+              className="px-3 py-1.5 rounded-lg bg-accent/10 text-accent hover:bg-accent hover:text-white transition-all text-xs font-semibold inline-flex items-center gap-1.5"
             >
               <Server className="w-3.5 h-3.5" />
               {t(lang, 'config_manage_models')}
@@ -357,11 +405,31 @@ export default function Config() {
                     <td className="py-1.5">
                       <div className="flex items-center gap-1">
                         <button
-                          onClick={async () => { await invoke('apply_config', { name: cfg.name }); await refresh(); showToast(t(lang, 'toast_applied')); }}
-                          className="p-1 rounded hover:bg-green/10 text-text-3 hover:text-green transition-colors"
-                          title={t(lang, 'btn_apply')}
+                          onClick={async () => {
+                            if (cfg.model === currentConfig?.model && proxyRunning) {
+                              // Current model is active, stop proxy
+                              await invoke('bypass_proxy');
+                              setProxyRunning(false);
+                              showToast(t(lang, 'toast_bypassed'));
+                            } else {
+                              // Apply this config
+                              await invoke('apply_config', { name: cfg.name });
+                              showToast(t(lang, 'toast_applied'));
+                            }
+                            await refresh();
+                          }}
+                          className={`p-1 rounded transition-colors ${
+                            cfg.model === currentConfig?.model && proxyRunning
+                              ? 'hover:bg-orange/10 text-orange hover:text-orange'
+                              : 'hover:bg-green/10 text-text-3 hover:text-green'
+                          }`}
+                          title={cfg.model === currentConfig?.model && proxyRunning ? t(lang, 'btn_deactivate') : t(lang, 'btn_apply')}
                         >
-                          <Power className="w-3.5 h-3.5" />
+                          {cfg.model === currentConfig?.model && proxyRunning ? (
+                            <Square className="w-3.5 h-3.5" />
+                          ) : (
+                            <Play className="w-3.5 h-3.5" />
+                          )}
                         </button>
                         <button
                           onClick={async () => {
@@ -375,7 +443,7 @@ export default function Config() {
                           className="p-1 rounded hover:bg-green/10 text-text-3 hover:text-green transition-colors"
                           title={t(lang, 'btn_test')}
                         >
-                          <Play className="w-3.5 h-3.5" />
+                          <Zap className="w-3.5 h-3.5" />
                         </button>
                         <button
                           onClick={() => doDisconnect(cfg.name)}

@@ -125,11 +125,45 @@ pub struct CurrentConfig {
 
 pub struct ConfigManager {
     config_path: PathBuf,
+    backup_path: PathBuf,
     lock: Mutex<()>,
 }
 
 impl ConfigManager {
-    pub fn new(config_path: PathBuf) -> Self { Self { config_path, lock: Mutex::new(()) } }
+    pub fn new(config_path: PathBuf) -> Self {
+        let backup_path = config_path.with_extension("toml.bak");
+        Self { config_path, backup_path, lock: Mutex::new(()) }
+    }
+
+    /// Backup current config file before proxy modifies it
+    pub fn backup_config(&self) {
+        let _guard = self.lock.lock();
+        if self.config_path.exists() {
+            let _ = fs::copy(&self.config_path, &self.backup_path);
+            tracing::info!("Config backed up to {}", self.backup_path.display());
+        }
+    }
+
+    /// Restore config file from backup (undo proxy changes)
+    pub fn restore_config(&self) -> bool {
+        let _guard = self.lock.lock();
+        if self.backup_path.exists() {
+            match fs::copy(&self.backup_path, &self.config_path) {
+                Ok(_) => {
+                    let _ = fs::remove_file(&self.backup_path);
+                    tracing::info!("Config restored from {}", self.backup_path.display());
+                    true
+                }
+                Err(e) => {
+                    tracing::error!("Failed to restore config: {}", e);
+                    false
+                }
+            }
+        } else {
+            tracing::warn!("No backup file found at {}", self.backup_path.display());
+            false
+        }
+    }
 
     fn read(&self) -> String {
         if !self.config_path.exists() { return String::new(); }
@@ -195,31 +229,31 @@ impl ConfigManager {
         if !model_name.is_empty() {
             new_header_parts.push(format!(r#"model = "{}""#, model_name));
         }
-        new_header_parts.push(format!(r#"model_provider = "{}""#, provider_key));
+        if !provider_key.is_empty() {
+            new_header_parts.push(format!(r#"model_provider = "{}""#, provider_key));
+        }
         for line in cleaned_header.lines() {
             if !line.trim().is_empty() {
                 new_header_parts.push(line.to_string());
             }
         }
         let new_header = new_header_parts.join("\n");
-        let mut new_content = if body.is_empty() {
+        // Remove ALL proxy-injected model_providers sections (those with base_url containing 127.0.0.1:8000)
+        let proxy_section_re = Regex::new(
+            r#"(?s)\n?\[model_providers\.[^\]]*\]\n[^\[]*?base_url\s*=\s*"[^"]*127\.0\.0\.1:8000[^"]*"[^\[]*"#
+        ).unwrap();
+        let cleaned_body = proxy_section_re.replace_all(&body, "").to_string();
+        let mut new_content = if cleaned_body.is_empty() {
             new_header
         } else {
-            format!("{}\n{}", new_header, body)
+            format!("{}\n{}", new_header, cleaned_body.trim_start_matches('\n'))
         };
-        let provider_section = format!(
-            "\n[model_providers.{}]\nname = \"{}\"\nbase_url = \"{}\"\nenv_key = \"PATH\"\nwire_api = \"responses\"\n",
-            provider_key, provider_key, base_url
-        );
-        let section_pattern = format!(
-            r"(?s)\[model_providers\.{}\].*?(\n\[|\z)",
-            regex::escape(&provider_key)
-        );
-        let section_re = Regex::new(&section_pattern).unwrap();
-        if section_re.is_match(&new_content) {
-            let replacement = format!("{}\n$1", provider_section.trim());
-            new_content = section_re.replace(&new_content, replacement.as_str()).to_string();
-        } else {
+        // Only write provider section if we have a valid provider
+        if !provider_key.is_empty() && !base_url.is_empty() {
+            let provider_section = format!(
+                "\n[model_providers.{}]\nname = \"{}\"\nbase_url = \"{}\"\nenv_key = \"PATH\"\nwire_api = \"responses\"\n",
+                provider_key, provider_key, base_url
+            );
             new_content.push('\n');
             new_content.push_str(&provider_section);
         }

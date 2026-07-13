@@ -104,3 +104,16 @@ export interface CatalogModel {
 export interface ModelCatalog {
   providers: CatalogProvider[];
 }
+
+export interface AggregatedStat {
+  period: string;
+  requests: number;
+  success: number;
+  failed: number;
+  input_tokens: number;
+  output_tokens: number;
+  avg_latency_ms: number;
+  models: [string, number][];
+}
+
+export type StatsDimension = 'day' | 'week' | 'month' | 'year';
