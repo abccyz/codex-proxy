@@ -271,6 +271,11 @@ fn get_history_stats(state: tauri::State<TauriAppState>, dimension: String) -> V
     state.history_store.get_stats(&dimension)
 }
 
+#[tauri::command]
+fn get_global_summary(state: tauri::State<TauriAppState>) -> history_store::GlobalSummary {
+    state.history_store.global_summary()
+}
+
 // ── App Entry ──
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -420,6 +425,7 @@ pub fn run() {
             get_metrics,
             get_history_detail,
             get_history_stats,
+            get_global_summary,
             get_current_config,
             get_saved_configs,
             get_config_full,

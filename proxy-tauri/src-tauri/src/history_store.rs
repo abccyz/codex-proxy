@@ -33,6 +33,20 @@ pub struct AggregatedStat {
     pub models: Vec<(String, u64)>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct GlobalSummary {
+    pub total_requests: u64,
+    pub total_success: u64,
+    pub total_failed: u64,
+    pub success_rate: f64,        // 0.0–100.0
+    pub total_input_tokens: u64,
+    pub total_output_tokens: u64,
+    pub total_tokens: u64,
+    pub avg_latency_ms: f64,
+    pub active_days: u64,
+    pub unique_models: u64,
+}
+
 pub struct HistoryStore {
     path: PathBuf,
     records: Mutex<Vec<DailyRecord>>,
@@ -141,6 +155,39 @@ impl HistoryStore {
                 r.date.chars().take(4).collect::<String>()
             }),
             _ => aggregate_by(&records, |r| r.date.clone()),
+        }
+    }
+
+    /// Compute global all-time summary across all records
+    pub fn global_summary(&self) -> GlobalSummary {
+        let records = self.records.lock().clone();
+        let total_requests: u64 = records.iter().map(|r| r.requests).sum();
+        let total_success: u64 = records.iter().map(|r| r.success).sum();
+        let total_failed: u64 = records.iter().map(|r| r.failed).sum();
+        let total_input_tokens: u64 = records.iter().map(|r| r.input_tokens).sum();
+        let total_output_tokens: u64 = records.iter().map(|r| r.output_tokens).sum();
+        let total_latency_ms: u64 = records.iter().map(|r| r.total_latency_ms).sum();
+        let active_days = records.len() as u64;
+        let mut models = std::collections::HashSet::new();
+        for r in &records { models.insert(&r.model); }
+        let success_rate = if total_requests > 0 {
+            (total_success as f64 / total_requests as f64) * 100.0
+        } else { 0.0 };
+        let avg_latency_ms = if total_requests > 0 {
+            total_latency_ms as f64 / total_requests as f64
+        } else { 0.0 };
+
+        GlobalSummary {
+            total_requests,
+            total_success,
+            total_failed,
+            success_rate: (success_rate * 10.0).round() / 10.0,
+            total_input_tokens,
+            total_output_tokens,
+            total_tokens: total_input_tokens + total_output_tokens,
+            avg_latency_ms: (avg_latency_ms * 10.0).round() / 10.0,
+            active_days,
+            unique_models: models.len() as u64,
         }
     }
 }

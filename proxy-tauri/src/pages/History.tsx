@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
-import { Search, ChevronLeft, ChevronRight, X, FileText, Activity, CheckCircle, Clock, Coins } from 'lucide-react';
+import { Search, ChevronLeft, ChevronRight, X, FileText, Activity, CheckCircle, Clock, Coins, CalendarDays, Layers, Zap } from 'lucide-react';
 import * as Tabs from '@radix-ui/react-tabs';
 import { BarChart, Bar, LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { useApp } from '@/contexts/AppContext';
@@ -8,7 +8,7 @@ import { t } from '@/lib/i18n';
 import { cn, formatLatency, formatNumber } from '@/lib/utils';
 import { invoke } from '@tauri-apps/api/core';
 import StatCard from '@/components/StatCard';
-import type { InputDetail, AggregatedStat, StatsDimension } from '@/lib/types';
+import type { InputDetail, AggregatedStat, StatsDimension, GlobalSummary } from '@/lib/types';
 
 const PIE_COLORS = ['var(--accent)', 'var(--blue)', 'var(--purple)', 'var(--yellow)', 'var(--green)', 'var(--red)', 'var(--text-3)'];
 
@@ -175,6 +175,41 @@ function HistoryListTab() {
 
 // ── Usage Stats Tab (new) ──
 
+function GlobalCards({ summary, lang: lang_ }: { summary: GlobalSummary | null; lang: string }) {
+  if (!summary || summary.total_requests === 0) return null;
+  return (
+    <div className="grid grid-cols-4 gap-2">
+      <StatCard
+        icon={Activity}
+        label="总请求数"
+        value={formatNumber(summary.total_requests)}
+        sub={`${summary.total_success} OK / ${summary.total_failed} ERR`}
+        accentClass="text-blue"
+      />
+      <StatCard
+        icon={CheckCircle}
+        label="成功率"
+        value={`${summary.success_rate}%`}
+        accentClass="text-accent"
+      />
+      <StatCard
+        icon={Coins}
+        label="总 Token"
+        value={formatNumber(summary.total_tokens)}
+        sub={`入 ${formatNumber(summary.total_input_tokens)} / 出 ${formatNumber(summary.total_output_tokens)}`}
+        accentClass="text-purple"
+      />
+      <StatCard
+        icon={Zap}
+        label="使用概况"
+        value={`${summary.active_days}d · ${summary.unique_models}m`}
+        sub={`均延 ${formatLatency(summary.avg_latency_ms)}`}
+        accentClass="text-yellow"
+      />
+    </div>
+  );
+}
+
 const DIMENSIONS: { id: StatsDimension; labelKey: string }[] = [
   { id: 'day', labelKey: 'stats_dimension_day' },
   { id: 'week', labelKey: 'stats_dimension_week' },
@@ -186,7 +221,15 @@ function UsageStatsTab() {
   const { lang } = useApp();
   const [dimension, setDimension] = useState<StatsDimension>('day');
   const [stats, setStats] = useState<AggregatedStat[]>([]);
+  const [globalSummary, setGlobalSummary] = useState<GlobalSummary | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Fetch global summary once on mount
+  useEffect(() => {
+    invoke<GlobalSummary>('get_global_summary')
+      .then(s => setGlobalSummary(s))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -236,15 +279,28 @@ function UsageStatsTab() {
   }, [stats]);
 
   if (loading) {
-    return <div className="flex items-center justify-center h-64 text-text-3 text-xs">Loading...</div>;
+    return (
+      <div className="h-full overflow-auto space-y-3">
+        <GlobalCards summary={globalSummary} lang={lang} />
+        <div className="flex items-center justify-center h-32 text-text-3 text-xs">Loading...</div>
+      </div>
+    );
   }
 
   if (stats.length === 0) {
-    return <div className="flex items-center justify-center h-64 text-text-3 text-xs">{t(lang, 'stats_no_data')}</div>;
+    return (
+      <div className="h-full overflow-auto space-y-3">
+        <GlobalCards summary={globalSummary} lang={lang} />
+        <div className="flex items-center justify-center h-32 text-text-3 text-xs">{t(lang, 'stats_no_data')}</div>
+      </div>
+    );
   }
 
   return (
     <div className="h-full overflow-auto space-y-3">
+      {/* Global summary cards - all-time totals */}
+      <GlobalCards summary={globalSummary} lang={lang} />
+
       {/* Dimension selector */}
       <div className="flex items-center gap-1 bg-bg-elev rounded-lg p-0.5 w-fit">
         {DIMENSIONS.map(d => (
