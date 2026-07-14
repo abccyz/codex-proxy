@@ -31,7 +31,7 @@ const PRESET_NAMES: Record<string, string> = {
 };
 
 export default function App() {
-  const { theme, setTheme, lang, setLang, proxyRunning, widgetVisible, bumpConfigVersion } = useApp();
+  const { theme, setTheme, lang, setLang, proxyRunning, widgetVisible, bumpConfigVersion, hasUpdate } = useApp();
   const { snapshot } = useMetrics();
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
 
@@ -138,7 +138,12 @@ export default function App() {
                   : "text-text-2 hover:text-text-1"
               )}
             >
-              <tab.icon className="w-3.5 h-3.5" />
+              <span className="relative">
+                <tab.icon className="w-3.5 h-3.5" />
+                {hasUpdate && activeTab !== 'about' && tab.id === 'about' && (
+                  <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 bg-red rounded-full" />
+                )}
+              </span>
               {t(lang, tab.labelKey)}
             </button>
           ))}

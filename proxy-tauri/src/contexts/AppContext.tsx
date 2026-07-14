@@ -12,6 +12,10 @@ interface AppContextType {
   bumpConfigVersion: () => void;
   widgetVisible: boolean;
   setWidgetVisible: (v: boolean) => void;
+  hasUpdate: boolean;
+  setHasUpdate: (v: boolean) => void;
+  latestVersion: string | null;
+  setLatestVersion: (v: string | null) => void;
 }
 
 const AppContext = createContext<AppContextType>(null!);
@@ -29,6 +33,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [widgetVisible, setWidgetVisible] = useState<boolean>(
     () => localStorage.getItem('proxy-widget') !== 'hidden'
   );
+  const [hasUpdate, setHasUpdate] = useState(false);
+  const [latestVersion, setLatestVersion] = useState<string | null>(null);
 
   const setTheme = (t: 'dark' | 'light') => { setThemeState(t); localStorage.setItem('proxy-theme', t); };
   const setLang = (l: Lang) => { setLangState(l); localStorage.setItem('proxy-lang', l); };
@@ -39,7 +45,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [theme]);
 
   return (
-    <AppContext.Provider value={{ theme, setTheme, lang, setLang, proxyRunning, setProxyRunning, configVersion, bumpConfigVersion, widgetVisible, setWidgetVisible: toggleWidget }}>
+    <AppContext.Provider value={{ theme, setTheme, lang, setLang, proxyRunning, setProxyRunning, configVersion, bumpConfigVersion, widgetVisible, setWidgetVisible: toggleWidget, hasUpdate, setHasUpdate, latestVersion, setLatestVersion }}>
       {children}
     </AppContext.Provider>
   );

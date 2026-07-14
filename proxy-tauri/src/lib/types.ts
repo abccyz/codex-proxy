@@ -129,4 +129,11 @@ export interface GlobalSummary {
   unique_models: number;
 }
 
+export interface VersionInfo {
+  current_version: string;
+  latest_version: string;
+  has_update: boolean;
+  release_url: string;
+}
+
 export type StatsDimension = 'hour' | 'day' | 'week' | 'month' | 'year';

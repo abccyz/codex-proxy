@@ -8,6 +8,7 @@ mod model;
 mod model_catalog;
 mod proxy;
 mod sse;
+mod version_check;
 
 use config::{ConfigManager, SecureConfigStore, SavedConfig};
 use connectivity::ConnectivityResult;
@@ -143,6 +144,11 @@ async fn test_connectivity(
     let client = &state.proxy_state.http_client;
     let result = connectivity::test_connectivity(client, &base_url, &api_key).await;
     Ok(result)
+}
+
+#[tauri::command]
+async fn check_for_update() -> Option<version_check::VersionInfo> {
+    version_check::check_latest_release().await
 }
 
 #[tauri::command]
@@ -447,6 +453,7 @@ pub fn run() {
             refresh_model_catalog,
             bypass_proxy,
             start_proxy,
+            check_for_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

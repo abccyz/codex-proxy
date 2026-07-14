@@ -141,6 +141,11 @@ const zh: Record<string, string> = {
   stats_no_data: "暂无统计数据，开始使用后将自动记录",
   widget_toggle_label: "悬浮窗",
   widget_toggle_desc: "在桌面右下角显示实时状态胶囊",
+  about_check_update: "检查更新",
+  about_checking: "检查中...",
+  about_update_available: "发现新版本",
+  about_up_to_date: "已是最新版本",
+  about_download: "下载更新",
 };
 
 const en: Record<string, string> = {
@@ -284,6 +289,11 @@ const en: Record<string, string> = {
   stats_no_data: "No data yet. Stats will be recorded automatically.",
   widget_toggle_label: "Floating Widget",
   widget_toggle_desc: "Show real-time status capsule at bottom-right",
+  about_check_update: "Check for Updates",
+  about_checking: "Checking...",
+  about_update_available: "New Version Available",
+  about_up_to_date: "Up to Date",
+  about_download: "Download Update",
 };
 
 export const dictionaries = { zh, en };
