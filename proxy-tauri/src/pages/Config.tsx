@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Check, X, Server, ArrowRight, Globe, Key, Cpu, RefreshCw, Zap, Plus, ChevronLeft, LogOut, Search, Wrench, Brain, Paperclip, DollarSign, Calendar, Box, Play, Trash2, Power, Square } from 'lucide-react';
+import { Check, X, Server, ArrowRight, Globe, Key, Cpu, RefreshCw, Zap, Plus, ChevronLeft, LogOut, Search, Wrench, Brain, Paperclip, DollarSign, Calendar, Box, Play, Trash2, Power, Square, Eye, EyeOff } from 'lucide-react';
 import { useApp } from '@/contexts/AppContext';
 import { t } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
@@ -33,7 +33,7 @@ const formatCost = (n: number | null): string => {
 };
 
 export default function Config() {
-  const { lang, configVersion, proxyRunning, setProxyRunning } = useApp();
+  const { lang, configVersion, proxyRunning, setProxyRunning, widgetVisible, setWidgetVisible } = useApp();
 
   // Data
   const [currentConfig, setCurrentConfig] = useState<CurrentConfig | null>(null);
@@ -353,6 +353,33 @@ export default function Config() {
             </div>
           </div>
         )}
+      </div>
+
+      {/* ===== 悬浮窗设置 ===== */}
+      <div className="bg-bg-card border border-border rounded-lg p-4">
+        <div className="flex items-center justify-between">
+          <div className="flex flex-col">
+            <h2 className="text-xs font-semibold text-text-1 flex items-center gap-2 mb-0.5">
+              <Eye className="w-3.5 h-3.5 text-purple" />
+              {t(lang, 'widget_toggle_label')}
+            </h2>
+            <span className="text-[10px] text-text-3">{t(lang, 'widget_toggle_desc')}</span>
+          </div>
+          <button
+            onClick={() => setWidgetVisible(!widgetVisible)}
+            className={cn(
+              'relative w-9 h-5 rounded-full transition-colors duration-200 flex-shrink-0',
+              widgetVisible ? 'bg-accent' : 'bg-bg-elev border border-border'
+            )}
+          >
+            <span
+              className={cn(
+                'absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200',
+                widgetVisible ? 'left-[calc(100%-1.125rem)]' : 'left-0.5'
+              )}
+            />
+          </button>
+        </div>
       </div>
 
       {/* ===== 已保存配置（表格） ===== */}

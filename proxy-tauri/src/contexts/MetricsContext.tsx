@@ -37,19 +37,30 @@ export function MetricsProvider({ children }: { children: ReactNode }) {
       });
     } else {
       // 非 Tauri 环境（浏览器）：通过代理 HTTP 端点轮询
+      let retries = 0;
+      const MAX_RETRIES = 30; // 30 * 2s = 60s total retry window
       const poll = async () => {
         try {
-          // 先检查代理是否运行
-          const healthRes = await fetch('http://127.0.0.1:8000/health');
+          const healthRes = await fetch('http://127.0.0.1:8000/health', { signal: AbortSignal.timeout(3000) });
           if (healthRes.ok) {
             setProxyRunning(true);
-            // 通过代理的 metrics 端点获取数据（如果有的话）
-            // 目前代理没有暴露 metrics HTTP 端点，所以这里只标记运行状态
+            retries = 0; // reset on success
           } else {
             setProxyRunning(false);
           }
         } catch {
-          setProxyRunning(false);
+          retries++;
+          if (retries <= MAX_RETRIES) {
+            setProxyRunning(false);
+          } else {
+            // Stop polling after too many failures to avoid console spam
+            if (intervalRef.current) {
+              clearInterval(intervalRef.current);
+              intervalRef.current = null;
+            }
+            setProxyRunning(false);
+            return;
+          }
         }
       };
 

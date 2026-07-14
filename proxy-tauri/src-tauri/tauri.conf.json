@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "ProxyTauri — Codex 代理监控",
         "width": 1200,
         "height": 800,
@@ -20,6 +21,22 @@
         "center": true,
         "resizable": true,
         "fullscreen": false
+      },
+      {
+        "label": "widget",
+        "title": "ProxyTauri Widget",
+        "url": "/widget.html",
+        "width": 250,
+        "height": 52,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": false,
+        "resizable": false,
+        "shadow": false,
+        "center": false,
+        "focus": false
       }
     ],
     "security": {
@@ -35,6 +52,19 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0",
+          "libayatana-appindicator3-1",
+          "librsvg2-common",
+          "libssl3",
+          "libsoup-3.0-0",
+          "libjavascriptcoregtk-4.1-0"
+        ]
+      }
+    }
   }
 }

@@ -68,6 +68,7 @@ impl AppState {
 }
 
 pub async fn run_server(state: Arc<AppState>, port: u16) -> Option<tokio::task::JoinHandle<()>> {
+    eprintln!("[proxy-tauri] Attempting to start proxy server on port {}...", port);
     kill_port_occupier(port);
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
@@ -84,6 +85,7 @@ pub async fn run_server(state: Arc<AppState>, port: u16) -> Option<tokio::task::
     let addr = format!("127.0.0.1:{}", port);
     match TcpListener::bind(&addr).await {
         Ok(listener) => {
+            eprintln!("[proxy-tauri] ✅ Proxy server listening on http://{}", addr);
             tracing::info!("Proxy server listening on http://{}", addr);
             let proxy_flag = state.proxy_running.clone();
             proxy_flag.store(true, Ordering::SeqCst);
@@ -93,6 +95,7 @@ pub async fn run_server(state: Arc<AppState>, port: u16) -> Option<tokio::task::
             }))
         }
         Err(e) => {
+            eprintln!("[proxy-tauri] ❌ Failed to bind port {}: {}", port, e);
             tracing::error!("Failed to bind port {}: {}", port, e);
             None
         }

@@ -338,11 +338,13 @@ pub fn run() {
             let saved_configs = secure_store.list_configs();
             let proxy_base_url = format!("http://127.0.0.1:{}/v1", PROXY_PORT);
             if saved_configs.is_empty() {
-                // No saved configs: clear proxy state and config file
-                proxy_state.set_upstream(String::new(), String::new());
-                proxy_state.set_upstream_model(String::new());
+                // No saved configs: use default upstream (set above in AppState)
+                // Keep the default upstream URL/model so proxy can start on first launch
                 config_manager.backup_config();
-                config_manager.apply_model("", "", "", "");
+                config_manager.apply_model(DEFAULT_UPSTREAM_MODEL, "", &proxy_base_url, DEFAULT_API_KEY);
+                // DEFAULT_UPSTREAM_URL already includes /chat/completions, use as-is
+                proxy_state.set_upstream(DEFAULT_UPSTREAM_URL.to_string(), DEFAULT_API_KEY.to_string());
+                proxy_state.set_upstream_model(DEFAULT_UPSTREAM_MODEL.to_string());
             } else {
                 let matching_cfg = saved_configs.iter().find(|s| s.model == current.model);
                 if let Some(cfg) = matching_cfg {
@@ -378,8 +380,10 @@ pub fn run() {
 
             app.manage(tauri_state);
 
-            // Start proxy server only if it was running before
-            if should_start_proxy && !saved_configs.is_empty() {
+            // Start proxy server: always auto-start when saved configs exist
+            eprintln!("[proxy-tauri] saved_configs.is_empty()={}, should_start_proxy={}", saved_configs.is_empty(), should_start_proxy);
+            if !saved_configs.is_empty() {
+                eprintln!("[proxy-tauri] Launching proxy server (has saved configs)...");
                 let px = proxy_state.clone();
                 let app_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
@@ -401,6 +405,8 @@ pub fn run() {
                         if let Some(state) = app_handle.try_state::<TauriAppState>() {
                             *state.metrics_handle.write().unwrap() = Some(mh);
                         }
+                    } else {
+                        eprintln!("[proxy-tauri] ❌ run_server returned None - proxy failed to start!");
                     }
                 });
             }

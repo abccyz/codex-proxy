@@ -139,6 +139,8 @@ const zh: Record<string, string> = {
   stats_token_trend: "Token 趋势",
   stats_latency_trend: "延迟趋势",
   stats_no_data: "暂无统计数据，开始使用后将自动记录",
+  widget_toggle_label: "悬浮窗",
+  widget_toggle_desc: "在桌面右下角显示实时状态胶囊",
 };
 
 const en: Record<string, string> = {
@@ -280,6 +282,8 @@ const en: Record<string, string> = {
   stats_token_trend: "Token Trend",
   stats_latency_trend: "Latency Trend",
   stats_no_data: "No data yet. Stats will be recorded automatically.",
+  widget_toggle_label: "Floating Widget",
+  widget_toggle_desc: "Show real-time status capsule at bottom-right",
 };
 
 export const dictionaries = { zh, en };

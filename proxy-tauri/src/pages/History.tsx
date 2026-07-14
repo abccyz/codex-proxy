@@ -220,7 +220,7 @@ const DIMENSIONS: { id: StatsDimension; labelKey: string }[] = [
 
 function UsageStatsTab() {
   const { lang } = useApp();
-  const [dimension, setDimension] = useState<StatsDimension>('day');
+  const [dimension, setDimension] = useState<StatsDimension>('hour');
   const [stats, setStats] = useState<AggregatedStat[]>([]);
   const [globalSummary, setGlobalSummary] = useState<GlobalSummary | null>(null);
   const [loading, setLoading] = useState(false);

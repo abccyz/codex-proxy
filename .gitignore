@@ -7,3 +7,17 @@ __pycache__/
 proxy-tauri/node_modules/
 proxy-rs/target/
 proxy-tauri/src-tauri/target/
+proxy-tauri/.zig-cache/
+proxy-tauri/.zig-tmp/
+proxy-tauri/linux-sysroot/
+proxy-tauri/target/
+proxy-tauri/dist-windows/
+proxy-tauri/null.o
+.zig-cache/
+.zig-tmp/
+dist/
+dist-windows/
+linux-sysroot/
+node_modules/
+target/
+package-lock.json

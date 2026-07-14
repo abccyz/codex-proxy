@@ -9,6 +9,8 @@ import Dashboard from '@/pages/Dashboard';
 import HistoryPage from '@/pages/History';
 import Config from '@/pages/Config';
 import About from '@/pages/About';
+import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { LogicalPosition } from '@tauri-apps/api/dpi';
 import type { SavedConfig } from '@/lib/types';
 
 type Tab = 'dashboard' | 'history' | 'config' | 'about';
@@ -29,7 +31,7 @@ const PRESET_NAMES: Record<string, string> = {
 };
 
 export default function App() {
-  const { theme, setTheme, lang, setLang, proxyRunning, bumpConfigVersion } = useApp();
+  const { theme, setTheme, lang, setLang, proxyRunning, widgetVisible, bumpConfigVersion } = useApp();
   const { snapshot } = useMetrics();
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
 
@@ -53,6 +55,33 @@ export default function App() {
   }, []);
 
   useEffect(() => { refreshConfigs(); }, [refreshConfigs]);
+
+  // ── 控制独立 widget 窗口 ──
+  useEffect(() => {
+    let cancelled = false;
+    let attempts = 0;
+    const manageWidget = async () => {
+      // 尝试获取 widget 窗口（最多重试 30 次，间隔 200ms）
+      let win: WebviewWindow | null = null;
+      while (!cancelled && attempts < 30) {
+        win = await WebviewWindow.getByLabel('widget');
+        if (win) break;
+        attempts++;
+        await new Promise(r => setTimeout(r, 200));
+      }
+      if (!win || cancelled) return;
+
+      if (widgetVisible) {
+        const { availWidth, availHeight } = window.screen;
+        await win.setPosition(new LogicalPosition(availWidth - 265, availHeight - 72));
+        if (!cancelled) await win.show();
+      } else {
+        if (!cancelled) await win.hide();
+      }
+    };
+    manageWidget();
+    return () => { cancelled = true; };
+  }, [widgetVisible]);
 
   // Close dropdown on click outside
   useEffect(() => {

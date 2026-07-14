@@ -8,7 +8,7 @@ import { useMetrics } from '@/contexts/MetricsContext';
 import { t } from '@/lib/i18n';
 import { cn, formatNumber, formatLatency, formatUptime } from '@/lib/utils';
 import StatCard from '@/components/StatCard';
-import type { CurrentConfig, TaskItem } from '@/lib/types';
+import type { CurrentConfig, TaskItem, AggregatedStat } from '@/lib/types';
 
 export default function Dashboard() {
   const { lang, proxyRunning, setProxyRunning } = useApp();
@@ -17,6 +17,7 @@ export default function Dashboard() {
   const [currentConfig, setCurrentConfig] = useState<CurrentConfig | null>(null);
   const [upstreamUrl, setUpstreamUrl] = useState('');
   const [upstreamModel, setUpstreamModel] = useState('');
+  const [hourlyStats, setHourlyStats] = useState<AggregatedStat[]>([]);
 
   useEffect(() => {
     const fetchConfig = async () => {
@@ -31,6 +32,18 @@ export default function Dashboard() {
       } catch {}
     };
     fetchConfig();
+  }, []);
+
+  // Fetch hourly stats on mount and refresh periodically
+  useEffect(() => {
+    const fetchHourly = () => {
+      invoke<AggregatedStat[]>('get_history_stats', { dimension: 'hour' })
+        .then(data => setHourlyStats(data))
+        .catch(() => setHourlyStats([]));
+    };
+    fetchHourly();
+    const timer = setInterval(fetchHourly, 30000); // refresh every 30s
+    return () => clearInterval(timer);
   }, []);
 
   const doBypassProxy = async () => {
@@ -106,6 +119,34 @@ export default function Dashboard() {
       { name: t(lang, 'token_output'), tokens: snapshot.total_output_tokens },
     ];
   }, [snapshot, lang]);
+
+  // ── Hourly chart data ──
+  const hourlyTrendData = useMemo(() => {
+    return hourlyStats.map(s => ({
+      period: formatHourLabel(s.period),
+      requests: s.requests,
+      success: s.success,
+      failed: s.failed,
+      input_tokens: s.input_tokens,
+      output_tokens: s.output_tokens,
+      avg_latency_ms: +(s.avg_latency_ms.toFixed(0)),
+    }));
+  }, [hourlyStats]);
+
+  const hasHourlyData = useMemo(() => hourlyStats.some(s => s.requests > 0), [hourlyStats]);
+
+  const hourlyModelData = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const s of hourlyStats) {
+      for (const [name, count] of s.models) {
+        map.set(name, (map.get(name) ?? 0) + count);
+      }
+    }
+    return Array.from(map.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 8);
+  }, [hourlyStats]);
 
   return (
     <div className="h-full overflow-auto p-3 space-y-2.5">
@@ -278,6 +319,92 @@ export default function Dashboard() {
       </div>
       </div>
 
+      {/* Hourly Charts — last 12 hours */}
+      {hourlyTrendData.length > 0 && (
+        <div>
+          <div className="text-[10px] text-text-3 uppercase tracking-wider font-semibold mb-1.5">
+            {t(lang, 'stats_dimension_hour')} · 最近12小时
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {/* Hourly Request Trend */}
+            <div className="bg-bg-card border border-border rounded-lg p-2.5">
+              <div className="text-[10px] text-text-3 uppercase tracking-wider font-semibold mb-1">
+                {t(lang, 'stats_request_trend')}
+              </div>
+              <ResponsiveContainer width="100%" height={110}>
+                <BarChart data={hourlyTrendData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <XAxis dataKey="period" tick={{ fontSize: 9, fill: 'var(--text-3)' }} interval="preserveStartEnd" />
+                  <YAxis tick={{ fontSize: 10, fill: 'var(--text-3)' }} width={30} />
+                  <Tooltip contentStyle={{ background: 'var(--bg-elev)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11 }} />
+                  <Bar dataKey="success" stackId="a" fill="var(--accent)" radius={[0, 0, 0, 0]} />
+                  <Bar dataKey="failed" stackId="a" fill="var(--red)" radius={[3, 3, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Hourly Latency Trend */}
+            <div className="bg-bg-card border border-border rounded-lg p-2.5">
+              <div className="text-[10px] text-text-3 uppercase tracking-wider font-semibold mb-1">
+                {t(lang, 'stats_latency_trend')} (ms)
+              </div>
+              <ResponsiveContainer width="100%" height={110}>
+                <LineChart data={hourlyTrendData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <XAxis dataKey="period" tick={{ fontSize: 9, fill: 'var(--text-3)' }} interval="preserveStartEnd" />
+                  <YAxis tick={{ fontSize: 10, fill: 'var(--text-3)' }} width={40} />
+                  <Tooltip contentStyle={{ background: 'var(--bg-elev)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11 }} formatter={(v) => [`${v} ms`, t(lang, 'stats_latency_trend')]} />
+                  <Line type="monotone" dataKey="avg_latency_ms" stroke="var(--yellow)" strokeWidth={2} dot={{ r: 2 }} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Hourly Token Trend */}
+            <div className="bg-bg-card border border-border rounded-lg p-2.5">
+              <div className="text-[10px] text-text-3 uppercase tracking-wider font-semibold mb-1">
+                {t(lang, 'stats_token_trend')}
+              </div>
+              <ResponsiveContainer width="100%" height={110}>
+                <AreaChart data={hourlyTrendData}>
+                  <defs>
+                    <linearGradient id="gradHourInput" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="var(--blue)" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="var(--blue)" stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="gradHourOutput" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="var(--accent)" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="var(--accent)" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <XAxis dataKey="period" tick={{ fontSize: 9, fill: 'var(--text-3)' }} interval="preserveStartEnd" />
+                  <YAxis tick={{ fontSize: 10, fill: 'var(--text-3)' }} width={40} />
+                  <Tooltip contentStyle={{ background: 'var(--bg-elev)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11 }} />
+                  <Area type="monotone" dataKey="input_tokens" stroke="var(--blue)" fill="url(#gradHourInput)" strokeWidth={1.5} name={t(lang, 'token_input')} />
+                  <Area type="monotone" dataKey="output_tokens" stroke="var(--accent)" fill="url(#gradHourOutput)" strokeWidth={1.5} name={t(lang, 'token_output')} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Hourly Model Distribution */}
+            <div className="bg-bg-card border border-border rounded-lg p-2.5">
+              <div className="text-[10px] text-text-3 uppercase tracking-wider font-semibold mb-1">
+                {t(lang, 'chart_models')}
+              </div>
+              <ResponsiveContainer width="100%" height={110}>
+                <BarChart data={hourlyModelData} layout="vertical">
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <XAxis type="number" tick={{ fontSize: 10, fill: 'var(--text-3)' }} />
+                  <YAxis type="category" dataKey="name" tick={{ fontSize: 9, fill: 'var(--text-3)' }} width={70} />
+                  <Tooltip contentStyle={{ background: 'var(--bg-elev)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11 }} />
+                  <Bar dataKey="count" fill="var(--purple)" radius={[0, 3, 3, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Charts Row 2 */}
       <div className="grid grid-cols-2 gap-2">
         <div className="bg-bg-card border border-border rounded-lg p-2.5">
@@ -419,4 +546,9 @@ function LiveStreamMarkdown({ content }: { content: string }) {
       </div>
     </div>
   );
+}
+
+/** Format hour period like "2026-07-14-15" → "15:00" */
+function formatHourLabel(period: string): string {
+  return period.slice(11) + ':00';
 }

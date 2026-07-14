@@ -134,17 +134,47 @@ impl HistoryStore {
         self.save_to_file();
     }
 
-    /// Get aggregated stats by dimension: "hour", "day", "week", "month", "year"
+    /// Get aggregated stats by dimension, filtered by current time range:
+    /// - hour: last 12 hours (from current time, counting backwards)
+    /// - day: this month
+    /// - week: last 4 weeks
+    /// - month: this year
+    /// - year: all time
     pub fn get_stats(&self, dimension: &str) -> Vec<AggregatedStat> {
         let records = self.records.lock().clone();
+        let now = Local::now();
+
+        // Hour dimension: special handling for last 12 hours with empty slot filling
+        if dimension == "hour" {
+            return self.get_hourly_stats(&records, &now);
+        }
+
+        // Filter records by time range based on dimension
+        let filtered: Vec<DailyRecord> = match dimension {
+            "day" => {
+                let this_month = now.format("%Y-%m").to_string();
+                records.into_iter().filter(|r| r.date.starts_with(&this_month)).collect()
+            }
+            "week" => {
+                let cutoff = now.naive_local().date() - chrono::Duration::days(28);
+                let cutoff_str = cutoff.format("%Y-%m-%d").to_string();
+                records.into_iter().filter(|r| {
+                    let date_part: String = r.date.chars().take(10).collect();
+                    date_part >= cutoff_str
+                }).collect()
+            }
+            "month" => {
+                let this_year = now.format("%Y").to_string();
+                records.into_iter().filter(|r| r.date.starts_with(&this_year)).collect()
+            }
+            _ => records, // "year" or unknown: all data
+        };
 
         match dimension {
-            "hour" => aggregate_by(&records, |r| r.date.clone()),
-            "day" => aggregate_by(&records, |r| {
-                // date is "YYYY-MM-DD-HH" or legacy "YYYY-MM-DD"
+            "day" => aggregate_by(&filtered, |r| {
                 r.date.chars().take(10).collect::<String>()
             }),
-            "week" => aggregate_by(&records, |r| {
+            "week" => aggregate_by(&filtered, |r| {
                 let date_str: String = r.date.chars().take(10).collect();
                 if let Ok(d) = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") {
                     let iso = d.iso_week();
@@ -153,14 +183,54 @@ impl HistoryStore {
                     date_str
                 }
             }),
-            "month" => aggregate_by(&records, |r| {
+            "month" => aggregate_by(&filtered, |r| {
                 r.date.chars().take(7).collect::<String>()
             }),
-            "year" => aggregate_by(&records, |r| {
+            "year" => aggregate_by(&filtered, |r| {
                 r.date.chars().take(4).collect::<String>()
             }),
-            _ => aggregate_by(&records, |r| r.date.clone()),
+            _ => aggregate_by(&filtered, |r| r.date.clone()),
         }
+    }
+
+    /// Generate last 12 hours of aggregated stats, filling empty slots with zeros.
+    fn get_hourly_stats(&self, records: &[DailyRecord], now: &chrono::DateTime<Local>) -> Vec<AggregatedStat> {
+        // Generate last 12 hour slots (from 11 hours ago to current hour)
+        let slots: Vec<String> = (0..12)
+            .map(|i| {
+                let dt = *now - chrono::Duration::hours(11 - i);
+                dt.format("%Y-%m-%d-%H").to_string()
+            })
+            .collect();
+
+        // Filter records that fall into these slots
+        let filtered: Vec<DailyRecord> = records
+            .iter()
+            .filter(|r| slots.contains(&r.date))
+            .cloned()
+            .collect();
+
+        let mut result = aggregate_by(&filtered, |r| r.date.clone());
+
+        // Fill missing slots with zero entries
+        for slot in &slots {
+            if !result.iter().any(|s| s.period == *slot) {
+                result.push(AggregatedStat {
+                    period: slot.clone(),
+                    requests: 0,
+                    success: 0,
+                    failed: 0,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    avg_latency_ms: 0.0,
+                    total_latency_ms: 0.0,
+                    models: Vec::new(),
+                });
+            }
+        }
+
+        result.sort_by(|a, b| a.period.cmp(&b.period));
+        result
     }
 
     /// Compute global all-time summary across all records

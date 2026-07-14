@@ -245,9 +245,16 @@ impl Metrics {
         if full_detail_count > MAX_FULL_DETAIL {
             for r in hist.records.iter_mut().rev().skip(MAX_FULL_DETAIL) { r.content.truncate(0); }
         }
-        let mut tps = hist.throughput.iter().enumerate().filter_map(|(i, tp)| if i > 0 { Some(tp.c) } else { None }).collect::<Vec<_>>();
-        tps.push(hist.records.len() as u64);
-        hist.throughput.push(ThroughputPoint { t: minute, c: 1 });
+        // Accumulate throughput: count requests per minute
+        if let Some(last) = hist.throughput.last_mut() {
+            if last.t == minute {
+                last.c += 1;
+            } else {
+                hist.throughput.push(ThroughputPoint { t: minute, c: 1 });
+            }
+        } else {
+            hist.throughput.push(ThroughputPoint { t: minute, c: 1 });
+        }
         if hist.throughput.len() > 60 { hist.throughput.remove(0); }
         hist.latency_history.push(LatencyPoint { t: timestamp, v: latency });
         if hist.latency_history.len() > 200 { hist.latency_history.remove(0); }
