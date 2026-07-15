@@ -27,6 +27,7 @@ export default function About() {
   const [checking, setChecking] = useState(false);
   const [checkResult, setCheckResult] = useState<'idle' | 'up_to_date' | 'has_update'>('idle');
   const [releaseUrl, setReleaseUrl] = useState('');
+  const [releaseNotes, setReleaseNotes] = useState('');
 
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => setAppVersion('0.0.0'));
@@ -41,6 +42,7 @@ export default function About() {
         setHasUpdate(true);
         setLatestVersion(result.latest_version);
         setReleaseUrl(result.release_url);
+        setReleaseNotes(result.release_notes);
         setCheckResult('has_update');
       } else if (result && !result.has_update) {
         setCheckResult('up_to_date');
@@ -93,20 +95,27 @@ export default function About() {
 
         {/* Check Result */}
         {checkResult === 'has_update' && latestVersion && (
-          <div className="mt-3 flex items-center justify-between p-2.5 rounded-lg bg-green/5 border border-green/20">
-            <div className="flex items-center gap-2">
-              <Download className="w-3.5 h-3.5 text-green" />
-              <span className="text-xs text-text-1">
-                {t(lang, 'about_update_available')} <span className="font-semibold">v{latestVersion}</span>
-              </span>
+          <>
+            <div className="mt-3 flex items-center justify-between p-2.5 rounded-lg bg-green/5 border border-green/20">
+              <div className="flex items-center gap-2">
+                <Download className="w-3.5 h-3.5 text-green" />
+                <span className="text-xs text-text-1">
+                  {t(lang, 'about_update_available')} <span className="font-semibold">v{latestVersion}</span>
+                </span>
+              </div>
+              <button
+                onClick={handleDownload}
+                className="px-2 py-0.5 rounded text-[11px] font-medium bg-green/10 text-green hover:bg-green/20 transition-colors"
+              >
+                {t(lang, 'about_download')}
+              </button>
             </div>
-            <button
-              onClick={handleDownload}
-              className="px-2 py-0.5 rounded text-[11px] font-medium bg-green/10 text-green hover:bg-green/20 transition-colors"
-            >
-              {t(lang, 'about_download')}
-            </button>
-          </div>
+            {releaseNotes && (
+              <div className="mt-2 p-2.5 rounded-lg bg-bg-elev border border-border">
+                <p className="text-[11px] text-text-2 whitespace-pre-wrap leading-relaxed max-h-32 overflow-auto">{releaseNotes}</p>
+              </div>
+            )}
+          </>
         )}
 
         {checkResult === 'up_to_date' && !checking && (

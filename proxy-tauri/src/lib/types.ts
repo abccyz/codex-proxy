@@ -134,6 +134,7 @@ export interface VersionInfo {
   latest_version: string;
   has_update: boolean;
   release_url: string;
+  release_notes: string;
 }
 
 export type StatsDimension = 'hour' | 'day' | 'week' | 'month' | 'year';

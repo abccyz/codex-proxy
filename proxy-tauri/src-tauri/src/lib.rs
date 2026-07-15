@@ -425,12 +425,9 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                #[cfg(any(target_os = "macos", target_os = "windows"))]
-                {
-                    api.prevent_close();
-                    let _ = window.hide();
-                }
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                // 窗口关闭时退出整个应用
+                window.app_handle().exit(0);
             }
         })
         .invoke_handler(tauri::generate_handler![

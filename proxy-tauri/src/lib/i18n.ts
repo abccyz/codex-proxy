@@ -146,6 +146,10 @@ const zh: Record<string, string> = {
   about_update_available: "发现新版本",
   about_up_to_date: "已是最新版本",
   about_download: "下载更新",
+  minimize: "最小化",
+  maximize: "最大化",
+  restore: "还原",
+  close: "关闭",
 };
 
 const en: Record<string, string> = {
@@ -294,6 +298,10 @@ const en: Record<string, string> = {
   about_update_available: "New Version Available",
   about_up_to_date: "Up to Date",
   about_download: "Download Update",
+  minimize: "Minimize",
+  maximize: "Maximize",
+  restore: "Restore",
+  close: "Close",
 };
 
 export const dictionaries = { zh, en };

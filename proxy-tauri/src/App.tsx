@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { LayoutDashboard, History, Settings, Sun, Moon, Languages, Activity, Wifi, WifiOff, ChevronDown, Check, Info } from 'lucide-react';
+import { LayoutDashboard, History, Settings, Sun, Moon, Languages, Activity, Wifi, WifiOff, ChevronDown, Check, Info, Minus, Square, Copy, X } from 'lucide-react';
 import { useApp } from '@/contexts/AppContext';
 import { useMetrics } from '@/contexts/MetricsContext';
 import { t } from '@/lib/i18n';
@@ -10,6 +10,7 @@ import HistoryPage from '@/pages/History';
 import Config from '@/pages/Config';
 import About from '@/pages/About';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { LogicalPosition } from '@tauri-apps/api/dpi';
 import type { SavedConfig } from '@/lib/types';
 
@@ -41,6 +42,26 @@ export default function App() {
   const [upstreamProvider, setUpstreamProvider] = useState('');
   const [showSwitcher, setShowSwitcher] = useState(false);
   const switcherRef = useRef<HTMLDivElement>(null);
+  const [isMaximized, setIsMaximized] = useState(false);
+
+  // Track window maximized state
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    getCurrentWindow().isMaximized().then(m => setIsMaximized(m)).catch(() => {});
+    getCurrentWindow().onResized(async () => {
+      try { setIsMaximized(await getCurrentWindow().isMaximized()); } catch {}
+    }).then(fn => { unlisten = fn; });
+    return () => { unlisten?.(); };
+  }, []);
+
+  // Titlebar drag handler
+  const handleTitlebarMouseDown = async (e: React.MouseEvent) => {
+    // Only start drag on left click, and not on interactive elements
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('button, input, select, a, [role="button"]')) return;
+    try { await getCurrentWindow().startDragging(); } catch {}
+  };
 
   const refreshConfigs = useCallback(async () => {
     try {
@@ -106,8 +127,11 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen">
-      {/* Header */}
-      <header className="flex items-center justify-between px-5 py-2.5 border-b border-border bg-bg-card flex-shrink-0">
+      {/* Custom Titlebar */}
+      <header
+        onMouseDown={handleTitlebarMouseDown}
+        className="flex items-center justify-between px-4 py-2 border-b border-border bg-bg-card flex-shrink-0 select-none cursor-default"
+      >
         <div className="flex items-center gap-3">
           <div className={cn(
             "w-2 h-2 rounded-full",
@@ -224,10 +248,40 @@ export default function App() {
             <Languages className="w-3.5 h-3.5" />
           </button>
           {proxyRunning ? (
-            <Activity className="w-3.5 h-3.5 text-accent ml-1" />
+            <Activity className="w-3.5 h-3.5 text-accent" />
           ) : (
-            <WifiOff className="w-3.5 h-3.5 text-red ml-1" />
+            <WifiOff className="w-3.5 h-3.5 text-red" />
           )}
+
+          {/* Window Controls */}
+          <div className="flex items-center gap-0.5 ml-1 pl-1 border-l border-border">
+            <button
+              onClick={async () => { try { await getCurrentWindow().minimize(); } catch {} }}
+              className="titlebar-btn"
+              title={t(lang, 'minimize')}
+            >
+              <Minus className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={async () => {
+                try {
+                  await getCurrentWindow().toggleMaximize();
+                  setIsMaximized(await getCurrentWindow().isMaximized());
+                } catch {}
+              }}
+              className="titlebar-btn"
+              title={isMaximized ? t(lang, 'restore') : t(lang, 'maximize')}
+            >
+              {isMaximized ? <Copy className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5" />}
+            </button>
+            <button
+              onClick={async () => { try { await getCurrentWindow().close(); } catch {} }}
+              className="titlebar-btn titlebar-btn-close"
+              title={t(lang, 'close')}
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       </header>
 

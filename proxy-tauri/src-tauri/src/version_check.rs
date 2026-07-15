@@ -7,6 +7,7 @@ pub struct VersionInfo {
     pub latest_version: String,
     pub has_update: bool,
     pub release_url: String,
+    pub release_notes: String,
 }
 
 const RELEASES_URL: &str = "https://github.com/abccyz/codex-proxy/releases";
@@ -35,16 +36,16 @@ pub async fn check_latest_release() -> Option<VersionInfo> {
 
     let latest_version = extract_latest_tag(&html)?;
     let release_url = format!("{}/tag/v{}", RELEASES_URL, latest_version);
+    let release_notes = extract_release_notes(&html, &latest_version).unwrap_or_default();
 
     let has_update = compare_versions(&latest_version, &current_version) > 0;
-
-    eprintln!("[version_check] current={}, latest={}, has_update={}", current_version, latest_version, has_update);
 
     Some(VersionInfo {
         current_version,
         latest_version,
         has_update,
         release_url,
+        release_notes,
     })
 }
 
@@ -70,6 +71,67 @@ fn extract_latest_tag(html: &str) -> Option<String> {
 
         search_from = tag_start + tag_end;
     }
+}
+
+fn extract_release_notes(html: &str, version: &str) -> Option<String> {
+    // GitHub Releases 页面的更新说明在 markdown-body class 中
+    // 找到第一个 markdown-body 区域（即最新 release 的说明）
+    let marker = "markdown-body";
+    let pos = html.find(marker)?;
+    
+    // 从 marker 位置开始，找到包含内容的 div
+    let after_marker = &html[pos..];
+    
+    // 找到 > 开始实际内容
+    let content_start = after_marker.find('>')? + 1;
+    let content_html = &after_marker[content_start..];
+    
+    // 找到结束标签 </div>
+    let content_end = content_html.find("</div>")?;
+    let raw_html = &content_html[..content_end];
+    
+    // 简单清理 HTML 标签，保留文本内容
+    let text = clean_html(raw_html);
+    let text = text.trim().to_string();
+    
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+fn clean_html(html: &str) -> String {
+    let mut result = String::new();
+    let mut in_tag = false;
+    let mut prev_was_space = false;
+    
+    for ch in html.chars() {
+        if ch == '<' {
+            in_tag = true;
+            continue;
+        }
+        if ch == '>' {
+            in_tag = false;
+            continue;
+        }
+        if in_tag {
+            continue;
+        }
+        
+        // 处理空白字符
+        if ch.is_whitespace() {
+            if !prev_was_space {
+                result.push(' ');
+                prev_was_space = true;
+            }
+        } else {
+            result.push(ch);
+            prev_was_space = false;
+        }
+    }
+    
+    result
 }
 
 fn get_app_version() -> String {
