@@ -107,7 +107,7 @@ const FloatingWidget = memo(
     // widget 窗口模式：代理未运行 → 显示简略占位
     if (inWidgetWindow && !proxyRunning) {
       return (
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-white/10 backdrop-blur-xl border border-white/20 rounded-full">
+        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full" style={{ background: 'rgba(30,30,35,0.75)', border: '1px solid rgba(255,255,255,0.1)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)' }}>
           <div className="w-2 h-2 rounded-full bg-white/30" />
           <span className="text-[10px] text-white/40 font-mono">--</span>
         </div>
@@ -117,7 +117,7 @@ const FloatingWidget = memo(
     // ---- 快照未就绪：渲染占位胶囊 ----
     if (!derived) {
       const Placeholder = (
-        <div className="flex items-center gap-3 bg-white/10 backdrop-blur-xl border border-white/20 rounded-full px-3 py-2 shadow-lg">
+        <div className="flex items-center gap-3 rounded-full px-3 py-2" style={{ background: 'rgba(30,30,35,0.75)', border: '1px solid rgba(255,255,255,0.1)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)' }}>
           <div className="w-4 h-4 rounded-full border-2 border-white/20 animate-pulse" />
           <span className="text-xs text-white/40 font-mono">--</span>
         </div>
@@ -147,7 +147,7 @@ const FloatingWidget = memo(
 
     // ---- 磨砂透明胶囊卡片 ----
     const card = (
-      <div className="flex items-center gap-2 px-3 py-1.5 bg-white/10 backdrop-blur-xl border border-white/20 rounded-full shadow-lg">
+      <div className="flex items-center gap-2 px-3 py-1.5 rounded-full" style={{ background: 'rgba(30,30,35,0.92)', border: '1px solid rgba(255,255,255,0.12)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', boxShadow: '0 4px 24px rgba(0,0,0,0.4)' }}>
         {/* Token 进度环 */}
         <svg
           width={svgSize}
@@ -184,10 +184,18 @@ const FloatingWidget = memo(
           {shortModel}
         </span>
 
-        {/* 简要数据 */}
-        <span className="text-[10px] text-white/50 font-mono whitespace-nowrap">
-          {derived.callCount} · {derived.avgLatency}
-        </span>
+        {/* 分隔线 */}
+        <div className="w-px h-6 mx-0.5 flex-shrink-0" style={{ background: 'linear-gradient(to bottom, transparent, rgba(255,255,255,0.2), transparent)' }} />
+
+        {/* 右侧：上下布局 + 中文说明 */}
+        <div className="flex flex-col gap-0.5">
+          <span className="text-[10px] text-white/50 font-mono whitespace-nowrap">
+            调用 {derived.callCount}
+          </span>
+          <span className="text-[10px] text-white/50 font-mono whitespace-nowrap">
+            延迟 {derived.avgLatency}
+          </span>
+        </div>
       </div>
     );
 

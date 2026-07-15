@@ -89,37 +89,6 @@ export default function Dashboard() {
     };
   }, [snapshot]);
 
-  const throughputData = useMemo(() => {
-    if (!snapshot) return [];
-    return snapshot.throughput.slice(-30).map((p, i) => ({
-      i,
-      v: p.c,
-      label: new Date(p.t * 60 * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    }));
-  }, [snapshot]);
-
-  const latencyData = useMemo(() => {
-    if (!snapshot) return [];
-    return snapshot.latency_history.slice(-50).map((p, i) => ({
-      i,
-      v: +(p.v * 1000).toFixed(0),
-      label: new Date(p.t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    }));
-  }, [snapshot]);
-
-  const modelData = useMemo(() => {
-    if (!snapshot) return [];
-    return Object.entries(snapshot.model_stats).map(([name, count]) => ({ name, count }));
-  }, [snapshot]);
-
-  const tokenData = useMemo(() => {
-    if (!snapshot) return [];
-    return [
-      { name: t(lang, 'token_input'), tokens: snapshot.total_input_tokens },
-      { name: t(lang, 'token_output'), tokens: snapshot.total_output_tokens },
-    ];
-  }, [snapshot, lang]);
-
   // ── Hourly chart data ──
   const hourlyTrendData = useMemo(() => {
     return hourlyStats.map(s => ({
@@ -277,48 +246,6 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Runtime Charts */}
-      <div>
-        <div className="text-[10px] text-text-3 uppercase tracking-wider font-semibold mb-1.5">运行时</div>
-        <div className="grid grid-cols-2 gap-2">
-          <div className="bg-bg-card border border-border rounded-lg p-2.5">
-            <div className="text-[10px] text-text-3 uppercase tracking-wider font-semibold mb-1">
-              {t(lang, 'chart_throughput')}
-            </div>
-          <ResponsiveContainer width="100%" height={110}>
-            <AreaChart data={throughputData}>
-              <defs>
-                <linearGradient id="gradThroughput" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="var(--blue)" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="var(--blue)" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-              <XAxis dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-3)' }} interval="preserveStartEnd" />
-              <YAxis tick={{ fontSize: 10, fill: 'var(--text-3)' }} width={30} />
-              <Tooltip contentStyle={{ background: 'var(--bg-elev)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11 }} labelFormatter={(l) => l} formatter={(v) => [`${v} req/min`, t(lang, 'chart_throughput')]} />
-              <Area type="monotone" dataKey="v" stroke="var(--blue)" fill="url(#gradThroughput)" strokeWidth={1.5} dot={false} />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-
-        <div className="bg-bg-card border border-border rounded-lg p-2.5">
-          <div className="text-[10px] text-text-3 uppercase tracking-wider font-semibold mb-1">
-            {t(lang, 'chart_latency')} (ms)
-          </div>
-          <ResponsiveContainer width="100%" height={110}>
-            <LineChart data={latencyData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-              <XAxis dataKey="label" tick={{ fontSize: 9, fill: 'var(--text-3)' }} interval="preserveStartEnd" />
-              <YAxis tick={{ fontSize: 10, fill: 'var(--text-3)' }} width={40} />
-              <Tooltip contentStyle={{ background: 'var(--bg-elev)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11 }} labelFormatter={(l) => l} formatter={(v) => [`${v} ms`, t(lang, 'chart_latency')]} />
-              <Line type="monotone" dataKey="v" stroke="var(--yellow)" strokeWidth={1.5} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-      </div>
-
       {/* Hourly Charts — last 12 hours */}
       {hourlyTrendData.length > 0 && (
         <div>
@@ -405,38 +332,6 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Charts Row 2 */}
-      <div className="grid grid-cols-2 gap-2">
-        <div className="bg-bg-card border border-border rounded-lg p-2.5">
-          <div className="text-[10px] text-text-3 uppercase tracking-wider font-semibold mb-1">
-            {t(lang, 'chart_models')}
-          </div>
-          <ResponsiveContainer width="100%" height={110}>
-            <BarChart data={modelData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-              <XAxis dataKey="name" tick={{ fontSize: 9, fill: 'var(--text-3)' }} angle={-20} textAnchor="end" height={40} />
-              <YAxis tick={{ fontSize: 10, fill: 'var(--text-3)' }} width={30} />
-              <Tooltip contentStyle={{ background: 'var(--bg-elev)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11 }} />
-              <Bar dataKey="count" fill="var(--purple)" radius={[3, 3, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        <div className="bg-bg-card border border-border rounded-lg p-2.5">
-          <div className="text-[10px] text-text-3 uppercase tracking-wider font-semibold mb-1">
-            {t(lang, 'chart_tokens')}
-          </div>
-          <ResponsiveContainer width="100%" height={110}>
-            <BarChart data={tokenData} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-              <XAxis type="number" tick={{ fontSize: 10, fill: 'var(--text-3)' }} />
-              <YAxis type="category" dataKey="name" tick={{ fontSize: 10, fill: 'var(--text-2)' }} width={50} />
-              <Tooltip contentStyle={{ background: 'var(--bg-elev)', border: '1px solid var(--border)', borderRadius: 6, fontSize: 11 }} />
-              <Bar dataKey="tokens" fill="var(--accent)" radius={[0, 3, 3, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
     </div>
   );
 }
